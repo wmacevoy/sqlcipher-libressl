@@ -2,7 +2,7 @@
 Notable changes to this project are documented in this file.
 
 ## [4.14.0] - (? 2026 - [4.14.0 changes])
-- Updates baseline to SQLite 3.52.0
+- Updates baseline to SQLite 3.51.3
 - Restores and improves upon LibTomCrypto provder
 - Minor test improvements
 
