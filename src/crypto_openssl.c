@@ -154,95 +154,54 @@ static int sqlcipher_openssl_hmac(
   const unsigned char *in2, int in2_sz,
   unsigned char *out
 ) {
-  int rc = 0;
-
-  size_t outlen;
-  EVP_MAC *mac = NULL;
-  EVP_MAC_CTX *hctx = NULL;
-  OSSL_PARAM sha1[] = { { "digest", OSSL_PARAM_UTF8_STRING, "sha1", 4, 0 }, OSSL_PARAM_END };
-  OSSL_PARAM sha256[] = { { "digest", OSSL_PARAM_UTF8_STRING, "sha256", 6, 0 }, OSSL_PARAM_END };
-  OSSL_PARAM sha512[] = { { "digest", OSSL_PARAM_UTF8_STRING, "sha512", 6, 0 }, OSSL_PARAM_END };
+  /* LibreSSL-compatible HMAC using the legacy HMAC() API.
+     Works with both LibreSSL and OpenSSL (all versions). */
+  unsigned int outlen = 0;
+  const EVP_MD *md = NULL;
+  HMAC_CTX *hctx = NULL;
 
   if(in == NULL) goto error;
 
-  mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
-  if(mac == NULL) {
-    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_fetch for HMAC failed");
-    sqlcipher_openssl_log_errors();
-    goto error;
-  }
-
-  hctx = EVP_MAC_CTX_new(mac);
-  if(hctx == NULL) {
-    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_CTX_new() failed");
-    sqlcipher_openssl_log_errors();
-    goto error;
-  }
-
   switch(algorithm) {
-    case SQLCIPHER_HMAC_SHA1:
-      if(!(rc = EVP_MAC_init(hctx, hmac_key, key_sz, sha1))) {
-        sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_init() with key size %d and sha1 returned %d", key_sz, rc);
-        sqlcipher_openssl_log_errors();
-        goto error;
-      }
-      break;
-    case SQLCIPHER_HMAC_SHA256:
-      if(!(rc = EVP_MAC_init(hctx, hmac_key, key_sz, sha256))) {
-        sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_init() with key size %d and sha256 returned %d", key_sz, rc);
-        sqlcipher_openssl_log_errors();
-        goto error;
-      }
-      break;
-    case SQLCIPHER_HMAC_SHA512:
-      if(!(rc = EVP_MAC_init(hctx, hmac_key, key_sz, sha512))) {
-        sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_init() with key size %d and sha512 returned %d", key_sz, rc);
-        sqlcipher_openssl_log_errors();
-        goto error;
-      }
-      break;
+    case SQLCIPHER_HMAC_SHA1:   md = EVP_sha1();   break;
+    case SQLCIPHER_HMAC_SHA256: md = EVP_sha256(); break;
+    case SQLCIPHER_HMAC_SHA512: md = EVP_sha512(); break;
     default:
       sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: invalid algorithm %d", algorithm);
       goto error;
   }
 
-  if(!(rc = EVP_MAC_update(hctx, in, in_sz))) {
-    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_update() on 1st input buffer of %d bytes using algorithm %d returned %d", in_sz, algorithm, rc);
-    sqlcipher_openssl_log_errors();
+  hctx = HMAC_CTX_new();
+  if(hctx == NULL) goto error;
+
+  if(!HMAC_Init_ex(hctx, hmac_key, key_sz, md, NULL)) {
+    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: HMAC_Init_ex() failed");
+    goto error;
+  }
+
+  if(!HMAC_Update(hctx, in, in_sz)) {
+    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: HMAC_Update() on 1st buffer failed");
     goto error;
   }
 
   if(in2 != NULL) {
-    if(!(rc = EVP_MAC_update(hctx, in2, in2_sz))) {
-      sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: EVP_MAC_update() on 2nd input buffer of %d bytes using algorithm %d returned %d", in_sz, algorithm, rc);
-      sqlcipher_openssl_log_errors();
+    if(!HMAC_Update(hctx, in2, in2_sz)) {
+      sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: HMAC_Update() on 2nd buffer failed");
       goto error;
     }
   }
 
-  if(!(rc = EVP_MAC_final(hctx, NULL, &outlen, 0))) {
-    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: 1st EVP_MAC_final() for output length calculation using algorithm %d returned %d", algorithm, rc);
-    sqlcipher_openssl_log_errors();
+  if(!HMAC_Final(hctx, out, &outlen)) {
+    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: HMAC_Final() failed");
     goto error;
   }
 
-  if(!(rc = EVP_MAC_final(hctx, out, &outlen, outlen))) {
-    sqlcipher_log(SQLCIPHER_LOG_ERROR, SQLCIPHER_LOG_PROVIDER, "sqlcipher_openssl_hmac: 2nd EVP_MAC_final() using algorithm %d returned %d", algorithm, rc);
-    sqlcipher_openssl_log_errors();
-    goto error;
-  }
-
-  rc = SQLITE_OK;
-  goto cleanup;
+  HMAC_CTX_free(hctx);
+  return SQLITE_OK;
 
 error:
-  rc = SQLITE_ERROR;
-
-cleanup:
-  if(hctx) EVP_MAC_CTX_free(hctx);
-  if(mac) EVP_MAC_free(mac);
-
-  return rc;
+  if(hctx) HMAC_CTX_free(hctx);
+  return SQLITE_ERROR;
 }
 
 static int sqlcipher_openssl_kdf(
