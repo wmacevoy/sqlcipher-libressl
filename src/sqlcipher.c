@@ -406,8 +406,14 @@ static void sqlcipher_fini(void) {
   #else
     static void (*const sqlcipher_fini_func)(void) __attribute__((used, section("__DATA,__mod_term_func"))) = sqlcipher_fini;
   #endif
+#elif defined(__EMSCRIPTEN__)
+  /* WASM: .fini_array not supported. Use atexit for cleanup.
+     When the browser tab closes, WASM memory is freed by the OS,
+     but atexit ensures explicit key zeroing if Module.exit() is called. */
+  __attribute__((constructor))
+  static void sqlcipher_register_fini(void) { atexit(sqlcipher_fini); }
 #else
-static void (*const sqlcipher_fini_func)(void) __attribute__((used, section(".fini_array"))) = sqlcipher_fini;
+  static void (*const sqlcipher_fini_func)(void) __attribute__((used, section(".fini_array"))) = sqlcipher_fini;
 #endif
 
 static void sqlcipher_exportFunc(sqlite3_context*, int, sqlite3_value**);
