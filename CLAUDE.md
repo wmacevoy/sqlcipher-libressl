@@ -4,8 +4,7 @@
 
 sqlcipher-libressl — Fork of SQLCipher v4.14.0 (SQLite 3.51.3) patched
 for LibreSSL compatibility and Emscripten/WASM builds.  Two patches over
-upstream, three files changed.  Used by y8 (github.com/wmacevoy/wyatt)
-for encrypted SQLite in the browser.
+upstream, three files changed.
 
 ## Patches
 
@@ -48,8 +47,7 @@ This is a standard SQLCipher checkout.  The amalgamation build:
 make sqlite3.c
 ```
 
-For WASM builds, see the CI workflow in the y8 project:
-`github.com/wmacevoy/wyatt/.github/workflows/wasm-sqlcipher.yml`
+For WASM builds, see the README.
 
 ## Constraints
 

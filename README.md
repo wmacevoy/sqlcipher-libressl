@@ -101,13 +101,6 @@ Overhead: ~50KB.  Future work: strip BIO from the WASM libcrypto build.
 - `getentropy()` maps cleanly to Web Crypto in WASM
 - BSD license (matches SQLCipher)
 
-## Used by
-
-[y8](https://github.com/wmacevoy/wyatt) &mdash; Ephemeral reactive
-Prolog with encrypted persistence.  SQLCipher WASM provides encrypted
-SQLite in the browser via the
-[sqlite3 oo1 API](https://sqlite.org/wasm/doc/trunk/api-oo1.md).
-
 ## License
 
 BSD (same as upstream SQLCipher).  See [LICENSE.md](LICENSE.md).
