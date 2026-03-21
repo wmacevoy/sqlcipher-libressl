@@ -23,6 +23,9 @@
 #include <unistd.h>
 #include "sqlite3.h"
 
+/* sqlite3_key is defined in sqlcipher.c but not in sqlite3.h */
+int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
+
 static void check(int rc, sqlite3 *db, const char *msg) {
     if (rc != SQLITE_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) {
         fprintf(stderr, "FAIL: %s: %s\n", msg, db ? sqlite3_errmsg(db) : "");

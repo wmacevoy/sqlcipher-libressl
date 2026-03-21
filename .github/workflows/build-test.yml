@@ -44,11 +44,13 @@ jobs:
 
       - name: Smoke test — encrypted round-trip
         run: |
-          gcc -O2 -o example_basic examples/basic.c \
+          gcc -O2 -o example_basic examples/basic.c sqlite3.c \
             -I. -I$HOME/libressl/include \
-            -L.libs -L$HOME/libressl/lib \
-            -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-          LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./example_basic
+            -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL \
+            -DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
+            -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown \
+            $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
+          ./example_basic
 
       - name: Run SQLCipher test suite
         run: |
