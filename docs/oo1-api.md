@@ -525,8 +525,8 @@ Returns `true` if the statement makes no direct changes to the database.
 ### Unified API (recommended)
 
 `sqlcipher-api.js` provides a single async interface that auto-detects
-the best persistence backend.  Prefer OPFS (durable per COMMIT), fall
-back to IndexedDB page cache (durable on `save()` and `close()`).
+the best persistence backend.  Prefer OPFS, fall back to IndexedDB
+page cache.  Both are durable per statement (auto-flush on every exec).
 
 ```html
 <script src="sqlcipher.js"></script>
@@ -542,8 +542,8 @@ back to IndexedDB page cache (durable on `save()` and `close()`).
   var rows = await db.select("SELECT * FROM t");
   console.log(rows);  // [{x: "hello"}]
 
-  await db.save();    // indexeddb: flush dirty pages. opfs: no-op.
-  await db.close();   // indexeddb: auto-saves then closes.
+  await db.save();    // manual flush (auto-flush happens on every exec)
+  await db.close();   // closes (auto-flushed already)
 })();
 </script>
 ```
@@ -564,7 +564,7 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 |--------|---------|-------------|
 | `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array. |
 | `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). |
-| `save()` | `Promise<void>` | **IndexedDB:** checkpoint WAL, flush dirty 4KB pages. **OPFS:** no-op. |
+| `save()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
 | `shred()` | `Promise<void>` | Overwrite all stored blocks with random data, then delete. Handle is unusable after. |
@@ -597,8 +597,9 @@ disk.  Zero data loss on tab crash.
 
 **IndexedDB page cache** — The entire file is loaded into memory on
 open.  VFS reads/writes operate on the buffer.  Dirty 4KB blocks are
-tracked; `save()` checkpoints WAL and writes only changed blocks to
-IndexedDB.  On `close()`, dirty pages are auto-flushed.
+tracked and auto-flushed to IndexedDB after every `exec()` (checkpoint
+WAL + write only changed blocks).  `save()` is still available for
+manual control but is no longer required for durability.
 
 IndexedDB schema (`sqlcipher_pages` database, `blocks` object store):
 
@@ -686,9 +687,9 @@ await db.save();   // exports entire encrypted blob → IndexedDB
 
 | | OPFS (unified/worker) | IndexedDB page cache (unified/worker) | IndexedDB blob (oo1) |
 |-|----------------------|--------------------------------------|---------------------|
-| Durability | Every COMMIT | On `save()` / `close()` | On `save()` call |
+| Durability | Every COMMIT (VFS xSync) | Every exec (auto-flush) | On `save()` call |
 | Write cost | 4KB per changed page | 4KB per dirty block | Entire database blob |
-| Tab crash | Data safe | Data since last `save()` lost | Data since last `save()` lost |
+| Tab crash | Data safe | Data safe (flushed per exec) | Data since last `save()` lost |
 | Thread | Worker (auto) | Worker (auto) | Main thread |
 | Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers | All browsers |
 

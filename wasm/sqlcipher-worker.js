@@ -467,6 +467,9 @@ async function handleMessage(msg) {
           var rc = _api.exec(_dbPtr, msg.sql);
           if (rc !== 0) throw new Error(_api.errmsg(_dbPtr));
         }
+        // Auto-persist: flush dirty pages (IndexedDB). OPFS is already
+        // durable via xSync — this is a no-op for OPFS.
+        await _checkpoint_and_flush();
         postMessage({id: id, ok: true, changes: _api.changes(_dbPtr)});
         break;
       }

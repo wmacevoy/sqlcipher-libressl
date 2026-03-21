@@ -9,8 +9,8 @@ patched for **LibreSSL** and **WASM**.  Two patches, two files changed.
 
 ## Browser: encrypted SQLite that just works
 
-Auto-detects the best persistence backend — OPFS (durable per commit)
-or IndexedDB page cache (durable on save/close).  Same API either way.
+Auto-detects the best persistence backend — OPFS or IndexedDB page
+cache.  Both are durable per statement.  Same API either way.
 
 ```html
 <script src="sqlcipher.js"></script>
@@ -26,7 +26,7 @@ or IndexedDB page cache (durable on save/close).  Same API either way.
   var rows = await db.select("SELECT * FROM t");
   console.log(rows);  // [{x: "hello"}]
 
-  await db.save();    // indexeddb: flush dirty pages. opfs: no-op.
+  await db.save();    // manual flush (auto-flush happens on every exec)
 
   // Export encrypted blob (for backup, server sync, etc.)
   var backup = await db.export();
@@ -66,7 +66,7 @@ python3 -m http.server 8000
 | `SQLCipher.open({filename, key})` | `Promise<Handle>` | Open/create database. Auto-detects backend. |
 | `db.exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. |
 | `db.select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects. |
-| `db.save()` | `Promise<void>` | IndexedDB: flush dirty 4KB pages. OPFS: no-op. |
+| `db.save()` | `Promise<void>` | Manual flush (auto-flush happens on every exec). |
 | `db.export()` | `Promise<Uint8Array>` | Full encrypted blob for transport. |
 | `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob. |
 | `db.shred()` | `Promise<void>` | Overwrite all storage with random data + delete. |
@@ -78,9 +78,9 @@ python3 -m http.server 8000
 
 | | OPFS (auto, preferred) | IndexedDB page cache (auto, fallback) |
 |-|----------------------|--------------------------------------|
-| **Durability** | Every COMMIT | On `save()` / `close()` |
+| **Durability** | Every COMMIT (via VFS xSync) | Every exec (auto-flush) |
 | **Write cost** | 4KB per changed page | 4KB per dirty block |
-| **Tab crash** | Data safe | Data since last `save()` lost |
+| **Tab crash** | Data safe | Data safe (flushed per exec) |
 | **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
 
 ### Worker message protocol

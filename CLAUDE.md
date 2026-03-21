@@ -13,7 +13,7 @@ encrypted persistence in the browser.
 ```
 Native:   SQLCipher + LibreSSL libcrypto.a → encrypted SQLite
 Browser:  SQLCipher WASM + VFS → encrypted, durable, no server
-          Worker auto-detects: OPFS (durable/commit) or IndexedDB page cache (durable/save)
+          Worker auto-detects: OPFS (durable/commit) or IndexedDB page cache (durable/exec)
           Unified API: sqlcipher-api.js — same interface, best backend
           oo1 API shim still available for main-thread use
 ```
