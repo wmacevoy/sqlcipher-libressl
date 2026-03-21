@@ -40,3 +40,9 @@ xcuserdata/*
 /.DS_Store
 examples/web/sqlcipher*
 examples/web/sqlcipher-oo1.js
+
+# Test dependencies (installed in CI)
+tests/wasm/node_modules/
+tests/wasm/package*.json
+tests/wasm/sqlcipher.*
+tests/wasm/sqlcipher-*.js

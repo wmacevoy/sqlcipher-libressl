@@ -152,8 +152,10 @@ jobs:
 
       - name: Install Playwright
         run: |
-          npm install -g playwright
-          playwright install --with-deps chromium
+          cd tests/wasm
+          npm init -y > /dev/null
+          npm install playwright
+          npx playwright install --with-deps chromium
 
       - name: Run WASM tests
         run: node tests/wasm/run-tests.mjs
