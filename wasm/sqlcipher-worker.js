@@ -3,14 +3,14 @@
 //
 // Auto-detects best persistence:
 //   OPFS     — SyncAccessHandle, durable on every COMMIT
-//   IndexedDB — page cache (4KB blocks), durable on save() and close()
+//   IndexedDB — page cache (4KB blocks), durable per exec
 //
 // Protocol (main thread ↔ worker):
 //   {type:"init"}                              → {ok, mode}
 //   {type:"open",  filename, key}              → {ok}
 //   {type:"exec",  sql, bind?}                 → {ok, changes}
 //   {type:"select",sql, bind?}                 → {ok, rows, names}
-//   {type:"save"}                              → {ok}
+//   {type:"flush"}                             → {ok}
 //   {type:"export"}                            → {ok, bytes}  (transferable)
 //   {type:"import", bytes}                     → {ok}
 //   {type:"shred"}                             → {ok}  (overwrite + delete)
@@ -480,7 +480,7 @@ async function handleMessage(msg) {
         break;
       }
 
-      case "save":
+      case "flush":
         await _checkpoint_and_flush();
         postMessage({id: id, ok: true});
         break;

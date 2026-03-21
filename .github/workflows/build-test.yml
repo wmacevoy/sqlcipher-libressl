@@ -250,7 +250,7 @@ jobs:
             await db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
             await db.exec("INSERT INTO t VALUES (?)", ["hello"]);
             var rows = await db.select("SELECT * FROM t");
-            await db.save();  // indexeddb: flush pages. opfs: no-op.
+            // data is durable — auto-flushed on every exec
             await db.close();
           })();
           </script>

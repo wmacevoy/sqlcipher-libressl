@@ -76,11 +76,11 @@
     await db.close();
   });
 
-  await test("save", async function() {
+  await test("flush", async function() {
     var db = await SQLCipher.open({filename: "/t4.db", key: "k4"});
     await db.exec("CREATE TABLE t (x TEXT)");
-    await db.exec("INSERT INTO t VALUES ('saved')");
-    await db.save();
+    await db.exec("INSERT INTO t VALUES ('flushed')");
+    await db.flush();
     await db.close();
   });
 
@@ -114,7 +114,7 @@
     var db = await SQLCipher.open({filename: "/t7.db", key: "k7"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('secret')");
-    await db.save();
+    await db.flush();
     await db.shred();
     // Reopen: should be a fresh empty database (file was deleted)
     var db2 = await SQLCipher.open({filename: "/t7.db", key: "k7"});
@@ -127,7 +127,7 @@
     var db = await SQLCipher.open({filename: "/t8.db", key: "k8"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('persisted')");
-    await db.save();
+    await db.flush();
     await db.close();
     var db2 = await SQLCipher.open({filename: "/t8.db", key: "k8"});
     var rows = await db2.select("SELECT x FROM t");
@@ -140,7 +140,7 @@
     var db = await SQLCipher.open({filename: "/t9.db", key: "correctkey"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('secret')");
-    await db.save();
+    await db.flush();
     await db.close();
     var db2 = await SQLCipher.open({filename: "/t9.db", key: "wrongkey"});
     var threw = false;
@@ -157,7 +157,7 @@
     var db = await SQLCipher.open({filename: "/t10.db", key: "k10"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('doomed')");
-    await db.save();
+    await db.flush();
     await db.shredOnClose();
     await db.close();
     // Reopen: should be fresh empty database

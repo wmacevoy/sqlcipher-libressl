@@ -10,10 +10,10 @@
 //   await db.exec("CREATE TABLE t (x TEXT)");
 //   await db.exec("INSERT INTO t VALUES (?)", ["hi"]);
 //   var rows = await db.select("SELECT * FROM t");  // [{x:"hi"}]
-//   await db.save();     // indexeddb: flush dirty pages. opfs: no-op.
+//   await db.flush();    // manual flush (auto-flush happens on every exec)
 //   var blob = await db.export();   // Uint8Array — full encrypted DB
 //   await db.import(blob);          // restore from blob
-//   await db.shredOnClose();        // flag: close() will shred instead of save
+//   await db.shredOnClose();        // flag: close() will shred instead of flush
 //   await db.shred();               // overwrite with random + delete (immediate)
 //   await db.close();               // auto-saves on indexeddb (or shreds if flagged)
 //
@@ -76,13 +76,12 @@ var SQLCipher = (function() {
   };
 
   /**
-   * Persist to storage.
-   * OPFS: no-op (already durable per COMMIT).
-   * IndexedDB: checkpoint WAL + flush dirty 4KB pages.
+   * Manual flush — checkpoint WAL + write dirty 4KB pages to storage.
+   * Auto-flush happens on every exec(), so this is rarely needed.
    * @returns {Promise<void>}
    */
-  Handle.prototype.save = function() {
-    return this._send({type: "save"}).then(function() {});
+  Handle.prototype.flush = function() {
+    return this._send({type: "flush"}).then(function() {});
   };
 
   /**
@@ -110,7 +109,7 @@ var SQLCipher = (function() {
   };
 
   /**
-   * Set flag: close() will shred instead of save.
+   * Set flag: close() will shred instead of closing normally.
    * Call early to ensure destruction even if close is called from cleanup code.
    * @returns {Promise<void>}
    */

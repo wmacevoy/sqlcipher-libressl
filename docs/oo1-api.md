@@ -542,7 +542,7 @@ page cache.  Both are durable per statement (auto-flush on every exec).
   var rows = await db.select("SELECT * FROM t");
   console.log(rows);  // [{x: "hello"}]
 
-  await db.save();    // manual flush (auto-flush happens on every exec)
+  await db.flush();   // manual flush (auto-flush happens on every exec)
   await db.close();   // closes (auto-flushed already)
 })();
 </script>
@@ -564,7 +564,7 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 |--------|---------|-------------|
 | `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array. |
 | `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). |
-| `save()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
+| `flush()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
 | `shred()` | `Promise<void>` | Overwrite all stored blocks with random data, then delete. Handle is unusable after. |
@@ -598,8 +598,8 @@ disk.  Zero data loss on tab crash.
 **IndexedDB page cache** — The entire file is loaded into memory on
 open.  VFS reads/writes operate on the buffer.  Dirty 4KB blocks are
 tracked and auto-flushed to IndexedDB after every `exec()` (checkpoint
-WAL + write only changed blocks).  `save()` is still available for
-manual control but is no longer required for durability.
+WAL + write only changed blocks).  `flush()` is available for manual
+control but is no longer required for durability.
 
 IndexedDB schema (`sqlcipher_pages` database, `blocks` object store):
 
@@ -622,7 +622,7 @@ A 10 MB database with 1 changed page writes 4 KB on save, not 10 MB.
 | `open` | `filename`, `key` | `{ok}` |
 | `exec` | `sql`, `bind?` | `{ok, changes}` |
 | `select` | `sql`, `bind?` | `{ok, rows, names}` |
-| `save` | — | `{ok}` |
+| `flush` | — | `{ok}` |
 | `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
 | `import` | `bytes` | `{ok}` |
 | `shred` | — | `{ok}` |

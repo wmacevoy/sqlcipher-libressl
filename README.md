@@ -26,7 +26,7 @@ cache.  Both are durable per statement.  Same API either way.
   var rows = await db.select("SELECT * FROM t");
   console.log(rows);  // [{x: "hello"}]
 
-  await db.save();    // manual flush (auto-flush happens on every exec)
+  await db.flush();   // manual flush (auto-flush happens on every exec)
 
   // Export encrypted blob (for backup, server sync, etc.)
   var backup = await db.export();
@@ -66,7 +66,7 @@ python3 -m http.server 8000
 | `SQLCipher.open({filename, key})` | `Promise<Handle>` | Open/create database. Auto-detects backend. |
 | `db.exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. |
 | `db.select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects. |
-| `db.save()` | `Promise<void>` | Manual flush (auto-flush happens on every exec). |
+| `db.flush()` | `Promise<void>` | Manual flush (auto-flush happens on every exec). |
 | `db.export()` | `Promise<Uint8Array>` | Full encrypted blob for transport. |
 | `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob. |
 | `db.shred()` | `Promise<void>` | Overwrite all storage with random data + delete. |
@@ -91,7 +91,7 @@ python3 -m http.server 8000
 | `open` | `filename`, `key` | `{ok}` |
 | `exec` | `sql`, `bind?` | `{ok, changes}` |
 | `select` | `sql`, `bind?` | `{ok, rows, names}` |
-| `save` | — | `{ok}` |
+| `flush` | — | `{ok}` |
 | `export` | — | `{ok, bytes}` |
 | `import` | `bytes` | `{ok}` |
 | `shred` | — | `{ok}` |

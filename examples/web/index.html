@@ -50,7 +50,7 @@
 <div class="section">
   <button id="btnInsert" disabled>Insert row</button>
   <button id="btnQuery" disabled>Query all</button>
-  <button id="btnSave" class="green" disabled>Save</button>
+  <button id="btnFlush" class="green" disabled>Flush</button>
   <button id="btnExport" disabled>Export blob</button>
   <button id="btnClear" class="danger" disabled>Clear database</button>
   <button id="btnShred" class="danger" disabled>Shred</button>
@@ -83,7 +83,7 @@ var phrases = [
 function disableButtons() {
   document.getElementById("btnInsert").disabled = true;
   document.getElementById("btnQuery").disabled = true;
-  document.getElementById("btnSave").disabled = true;
+  document.getElementById("btnFlush").disabled = true;
   document.getElementById("btnExport").disabled = true;
   document.getElementById("btnClear").disabled = true;
   document.getElementById("btnShred").disabled = true;
@@ -92,7 +92,7 @@ function disableButtons() {
 function enableButtons() {
   document.getElementById("btnInsert").disabled = false;
   document.getElementById("btnQuery").disabled = false;
-  document.getElementById("btnSave").disabled = false;
+  document.getElementById("btnFlush").disabled = false;
   document.getElementById("btnExport").disabled = false;
   document.getElementById("btnClear").disabled = false;
   document.getElementById("btnShred").disabled = false;
@@ -123,11 +123,7 @@ function enableButtons() {
     }
     await showRows();
 
-    if (db.mode === "opfs") {
-      log("\nOPFS: every INSERT is durable automatically.", "info");
-    } else {
-      log("\nIndexedDB: call Save to persist (auto-saves on close).", "info");
-    }
+    log("\nEvery exec is durable automatically (" + db.mode + ").", "info");
 
     enableButtons();
   } catch(e) {
@@ -167,10 +163,10 @@ document.getElementById("btnQuery").onclick = async function() {
   await showRows();
 };
 
-document.getElementById("btnSave").onclick = async function() {
+document.getElementById("btnFlush").onclick = async function() {
   try {
-    await db.save();
-    log("Saved." + (db.mode === "opfs" ? " (no-op — OPFS is always durable)" : " Dirty pages flushed to IndexedDB."), "ok");
+    await db.flush();
+    log("Flushed dirty pages to storage.", "ok");
   } catch(e) { log("FAIL: " + e.message, "err"); }
 };
 
@@ -193,7 +189,6 @@ document.getElementById("btnClear").onclick = async function() {
   clear();
   try {
     await db.exec("DELETE FROM notes");
-    await db.save();
     log("Cleared all rows.", "ok");
   } catch(e) { log("FAIL: " + e.message, "err"); }
 };
