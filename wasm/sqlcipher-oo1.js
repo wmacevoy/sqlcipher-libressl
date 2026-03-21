@@ -1,6 +1,6 @@
 
 // ============================================================
-// oo1.js — sqlite3 oo1 API over SQLCipher WASM
+// sqlcipher-oo1.js — sqlite3 oo1 API over SQLCipher WASM
 //
 // Standalone OO1 wrapper for SQLCipher compiled to WASM.
 // API reference: https://sqlite.org/wasm/doc/trunk/api-oo1.md

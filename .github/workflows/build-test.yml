@@ -3,6 +3,7 @@ name: build-test
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -143,6 +144,72 @@ jobs:
           path: |
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
-            wasm/oo1.js
-            examples/web/index.html
+            wasm/sqlcipher-oo1.js
           retention-days: 90
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [native, wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sqlcipher-wasm
+          path: release
+
+      - name: Prepare release files
+        run: |
+          mkdir -p dist
+          cp release/wasm/dist/sqlcipher.js dist/
+          cp release/wasm/dist/sqlcipher.wasm dist/
+          cp release/wasm/sqlcipher-oo1.js dist/
+          ls -lh dist/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            dist/sqlcipher.js \
+            dist/sqlcipher.wasm \
+            dist/sqlcipher-oo1.js \
+            --title "SQLCipher WASM ${{ github.ref_name }}" \
+            --notes "$(cat <<'NOTES'
+          Encrypted SQLite in the browser — SQLCipher + LibreSSL, compiled to WASM.
+
+          ## Files
+
+          | File | Description |
+          |------|-------------|
+          | `sqlcipher.js` | Emscripten glue (~94KB) |
+          | `sqlcipher.wasm` | Compiled binary (~1.4MB) |
+          | `sqlcipher-oo1.js` | oo1 API shim + IndexedDB persistence |
+
+          ## Quick start
+
+          ```html
+          <script src="sqlcipher.js"></script>
+          <script src="sqlcipher-oo1.js"></script>
+          <script>
+          (async function() {
+            var Module = await initSqlcipher();
+            var db = await DB.load(Module, {
+              filename: "/app.db",
+              key: "secret",
+              store: "myapp"
+            });
+            db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
+            db.exec({sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
+            await db.save();
+          })();
+          </script>
+          ```
+
+          See [docs/oo1-api.md](docs/oo1-api.md) for the full API reference.
+          NOTES
+          )"
