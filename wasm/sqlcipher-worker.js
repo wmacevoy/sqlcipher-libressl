@@ -290,11 +290,11 @@ async function init() {
     _opfs_access:   function()                 { return 0; }
   });
 
-  if (!_useOpfs) {
-    Module._opfs_open_sync = function(name) {
-      return _vfs.openIdb(name);
-    };
-  }
+  // Always allow on-demand handle creation for journal/WAL/SHM files.
+  // These are transient — memory handles are fine for both backends.
+  Module._opfs_open_sync = function(name) {
+    return _vfs.openIdb(name);
+  };
 
   _api = {
     open:       Module.cwrap("wasm_db_open",           "number",  ["string"]),
