@@ -29,8 +29,7 @@ Browser:  SQLCipher WASM + VFS → encrypted, durable, no server
 | `wasm/sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB blob) |
 | `wasm/sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
 | `examples/basic.c` | Native C smoke test |
-| `examples/web/index.html` | Browser demo (Worker + OPFS) |
-| `examples/web/unified.html` | Browser demo (unified API) |
+| `examples/web/index.html` | Browser demo (unified API) |
 | `docs/oo1-api.md` | Full API reference + persistence docs |
 
 ## Commands

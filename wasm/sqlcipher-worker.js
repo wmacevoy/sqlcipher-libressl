@@ -13,6 +13,7 @@
 //   {type:"save"}                              → {ok}
 //   {type:"export"}                            → {ok, bytes}  (transferable)
 //   {type:"import", bytes}                     → {ok}
+//   {type:"shred"}                             → {ok}  (overwrite + delete)
 //   {type:"close"}                             → {ok}
 // ============================================================
 
@@ -108,6 +109,19 @@ var _pageStore = {
           store.put(bytes.slice(start, Math.min(start + bs, bytes.length)),
                     [filename, b]);
         }
+        tx.oncomplete = function() { db.close(); resolve(); };
+        tx.onerror = function() { db.close(); reject(tx.error); };
+      });
+    });
+  },
+
+  /** Delete all blocks for a file from IndexedDB. */
+  deleteFile: function(filename) {
+    return this._open().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction("blocks", "readwrite");
+        var range = IDBKeyRange.bound([filename, -1], [filename, 9999999]);
+        tx.objectStore("blocks").delete(range);
         tx.oncomplete = function() { db.close(); resolve(); };
         tx.onerror = function() { db.close(); reject(tx.error); };
       });
@@ -457,6 +471,43 @@ async function handleMessage(msg) {
         _currentFilename = fn;
         _dbPtr = _api.open(fn);
         if (_currentKey) _api.key(_dbPtr, _currentKey);
+        postMessage({id: id, ok: true});
+        break;
+      }
+
+      case "shred": {
+        // Overwrite all stored data with random bytes, then delete.
+        var sfn = _currentFilename;
+        if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+        var shid = Module._opfs_preopen && Module._opfs_preopen[sfn];
+        var sh = shid !== undefined ? _handles[shid] : null;
+
+        if (sh && sh.type === "opfs") {
+          // Overwrite OPFS file with random data, then delete
+          var sz = sh.sah.getSize();
+          var rnd = new Uint8Array(sz);
+          crypto.getRandomValues(rnd);
+          sh.sah.write(rnd, {at: 0});
+          sh.sah.flush();
+          sh.sah.close();
+          _handles[shid] = null;
+          var loc = await _getDir(sfn);
+          try { await loc.dir.removeEntry(loc.filename); } catch(e) {}
+        } else if (sh && sh.type === "idb") {
+          // Overwrite IndexedDB blocks with random data, then delete
+          var meta = {fileSize: sh.buf.length};
+          var numBlocks = Math.ceil(meta.fileSize / _pageStore.BLOCK);
+          var allDirty = new Set();
+          for (var bi = 0; bi < numBlocks; bi++) allDirty.add(bi);
+          crypto.getRandomValues(sh.buf);
+          await _pageStore.flush(sfn, sh.buf, allDirty);
+          // Now delete all blocks
+          await _pageStore.deleteFile(sfn);
+          _handles[shid] = null;
+        }
+
+        _currentFilename = null;
+        _currentKey = null;
         postMessage({id: id, ok: true});
         break;
       }

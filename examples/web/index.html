@@ -3,21 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SQLCipher WASM — Encrypted Persistent SQLite in the Browser</title>
+<title>SQLCipher — Unified API</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
   h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   p.sub { color: #666; margin-bottom: 1.5rem; font-size: 0.95rem; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px;
+           font-size: 0.8rem; font-weight: 600; color: white; vertical-align: middle; }
+  .badge.opfs { background: #16a34a; }
+  .badge.indexeddb { background: #2563eb; }
   .section { margin-bottom: 1.5rem; }
   label { display: block; font-weight: 600; margin-bottom: 0.3rem; }
-  input { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95rem; width: 100%; max-width: 300px; }
-  button { padding: 0.4rem 1rem; border: none; border-radius: 4px; background: #2563eb; color: white; font-size: 0.95rem; cursor: pointer; margin: 0.3rem 0.3rem 0.3rem 0; }
+  input { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
+          font-size: 0.95rem; width: 100%; max-width: 300px; }
+  button { padding: 0.4rem 1rem; border: none; border-radius: 4px;
+           background: #2563eb; color: white; font-size: 0.95rem;
+           cursor: pointer; margin: 0.3rem 0.3rem 0.3rem 0; }
   button:hover { background: #1d4ed8; }
   button:disabled { background: #94a3b8; cursor: default; }
+  button.green { background: #16a34a; }
+  button.green:hover { background: #15803d; }
   button.danger { background: #dc2626; }
   button.danger:hover { background: #b91c1c; }
-  #log { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; font-family: "SF Mono", Menlo, monospace; font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
+  #log { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+         padding: 1rem; font-family: "SF Mono", Menlo, monospace; font-size: 0.85rem;
+         line-height: 1.6; white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
   .ok { color: #16a34a; }
   .err { color: #dc2626; }
   .info { color: #2563eb; }
@@ -25,24 +36,30 @@
 </head>
 <body>
 
-<h1>SQLCipher WASM + OPFS</h1>
-<p class="sub">Encrypted SQLite in the browser.  Data persists in the
-  Origin Private File System — every COMMIT is durable.  No manual save.
-  Reload the page, close the tab, even crash — your data survives.</p>
+<h1>SQLCipher <span id="badge" class="badge" hidden></span></h1>
+<p class="sub">
+  Encrypted SQLite in the browser.  Auto-detects OPFS (durable per commit)
+  or IndexedDB page cache (durable on save/close).  Same API either way.
+</p>
 
 <div class="section">
   <label>Encryption key</label>
-  <input id="key" type="text" value="correct-horse-battery-staple" placeholder="encryption key">
+  <input id="key" type="text" value="correct-horse-battery-staple">
 </div>
 
 <div class="section">
   <button id="btnInsert" disabled>Insert row</button>
   <button id="btnQuery" disabled>Query all</button>
+  <button id="btnSave" class="green" disabled>Save</button>
+  <button id="btnExport" disabled>Export blob</button>
   <button id="btnClear" class="danger" disabled>Clear database</button>
+  <button id="btnShred" class="danger" disabled>Shred</button>
 </div>
 
 <div id="log">Loading SQLCipher WASM...</div>
 
+<script src="sqlcipher.js"></script>
+<script src="sqlcipher-api.js"></script>
 <script>
 var logEl = document.getElementById("log");
 function log(msg, cls) {
@@ -54,43 +71,7 @@ function log(msg, cls) {
 }
 function clear() { logEl.innerHTML = ""; }
 
-// ── Worker communication ─────────────────────────────────────
-
-var worker = new Worker("sqlcipher-worker.js");
-var _id = 0, _pending = {};
-
-function send(msg) {
-  return new Promise(function(resolve, reject) {
-    msg.id = ++_id;
-    _pending[msg.id] = {resolve: resolve, reject: reject};
-    worker.postMessage(msg);
-  });
-}
-
-worker.onmessage = function(e) {
-  var p = _pending[e.data.id];
-  if (!p) return;
-  delete _pending[e.data.id];
-  if (e.data.ok) p.resolve(e.data);
-  else p.reject(new Error(e.data.error));
-};
-
-// ── Show rows ────────────────────────────────────────────────
-
-async function showRows() {
-  var result = await send({type: "select", sql: "SELECT * FROM notes ORDER BY created DESC"});
-  if (result.rows.length === 0) {
-    log("  (no rows yet)", "info");
-  } else {
-    result.rows.forEach(function(r) {
-      log("  [" + r.id + "] " + r.text + "  (" + new Date(r.created).toLocaleTimeString() + ")");
-    });
-  }
-  log("  " + result.rows.length + " row(s)", "ok");
-}
-
-// ── Button handlers ──────────────────────────────────────────
-
+var db;
 var counter = 0;
 var phrases = [
   "The sky is clear", "Wind from the north", "Temperature rising",
@@ -99,66 +80,133 @@ var phrases = [
   "Awaiting input", "Data collected", "Threshold exceeded"
 ];
 
-document.getElementById("btnInsert").onclick = async function() {
-  counter++;
-  var text = phrases[counter % phrases.length] + " #" + counter;
-  try {
-    await send({type: "exec", sql: "INSERT INTO notes (text, created) VALUES (?, ?)", bind: [text, Date.now()]});
-    log("Inserted: " + text + "  (durable — persisted to OPFS)", "ok");
-  } catch(e) {
-    log("FAIL: " + e.message, "err");
-  }
-};
+function disableButtons() {
+  document.getElementById("btnInsert").disabled = true;
+  document.getElementById("btnQuery").disabled = true;
+  document.getElementById("btnSave").disabled = true;
+  document.getElementById("btnExport").disabled = true;
+  document.getElementById("btnClear").disabled = true;
+  document.getElementById("btnShred").disabled = true;
+}
 
-document.getElementById("btnQuery").onclick = async function() {
-  clear();
-  log("SELECT * FROM notes ORDER BY created DESC:", "info");
-  await showRows();
-};
-
-document.getElementById("btnClear").onclick = async function() {
-  clear();
-  try {
-    await send({type: "exec", sql: "DELETE FROM notes"});
-    log("Cleared all rows.", "ok");
-  } catch(e) {
-    log("FAIL: " + e.message, "err");
-  }
-};
+function enableButtons() {
+  document.getElementById("btnInsert").disabled = false;
+  document.getElementById("btnQuery").disabled = false;
+  document.getElementById("btnSave").disabled = false;
+  document.getElementById("btnExport").disabled = false;
+  document.getElementById("btnClear").disabled = false;
+  document.getElementById("btnShred").disabled = false;
+}
 
 // ── Init ─────────────────────────────────────────────────────
 
 (async function() {
   try {
-    log("Initializing SQLCipher WASM + OPFS VFS...", "info");
-    await send({type: "init"});
-    log("WASM loaded. OPFS VFS registered.", "ok");
-
     var key = document.getElementById("key").value;
-    await send({type: "open", filename: "/notes.db", key: key});
 
-    // Create table if fresh database
-    await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)"});
+    log("Opening database...", "info");
+    db = await SQLCipher.open({filename: "/notes.db", key: key});
 
-    // Check if we have existing data
-    var result = await send({type: "select", sql: "SELECT count(*) as n FROM notes"});
-    if (result.rows[0].n > 0) {
-      log("Database restored from OPFS. " + result.rows[0].n + " rows survived.", "ok");
+    var badge = document.getElementById("badge");
+    badge.textContent = db.mode;
+    badge.className = "badge " + db.mode;
+    badge.hidden = false;
+    log("Backend: " + db.mode, "ok");
+
+    await db.exec("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)");
+
+    var rows = await db.select("SELECT count(*) as n FROM notes");
+    if (rows[0].n > 0) {
+      log("Restored " + rows[0].n + " row(s) from storage.", "ok");
     } else {
       log("Fresh encrypted database created.", "ok");
     }
-
     await showRows();
-    log("\nReload the page — data persists automatically.\nNo save() needed. Every INSERT is durable.\n", "info");
 
-    document.getElementById("btnInsert").disabled = false;
-    document.getElementById("btnQuery").disabled = false;
-    document.getElementById("btnClear").disabled = false;
+    if (db.mode === "opfs") {
+      log("\nOPFS: every INSERT is durable automatically.", "info");
+    } else {
+      log("\nIndexedDB: call Save to persist (auto-saves on close).", "info");
+    }
+
+    enableButtons();
   } catch(e) {
     log("FAIL: " + e.message, "err");
     log("Ensure you're serving over HTTPS or localhost.", "info");
   }
 })();
+
+// ── Show rows ────────────────────────────────────────────────
+
+async function showRows() {
+  var rows = await db.select("SELECT * FROM notes ORDER BY created DESC");
+  if (rows.length === 0) {
+    log("  (no rows)", "info");
+  } else {
+    rows.forEach(function(r) {
+      log("  [" + r.id + "] " + r.text + "  (" + new Date(r.created).toLocaleTimeString() + ")");
+    });
+  }
+  log("  " + rows.length + " row(s)", "ok");
+}
+
+// ── Buttons ──────────────────────────────────────────────────
+
+document.getElementById("btnInsert").onclick = async function() {
+  counter++;
+  var text = phrases[counter % phrases.length] + " #" + counter;
+  try {
+    await db.exec("INSERT INTO notes (text, created) VALUES (?, ?)", [text, Date.now()]);
+    log("Inserted: " + text, "ok");
+  } catch(e) { log("FAIL: " + e.message, "err"); }
+};
+
+document.getElementById("btnQuery").onclick = async function() {
+  clear();
+  log("SELECT * FROM notes:", "info");
+  await showRows();
+};
+
+document.getElementById("btnSave").onclick = async function() {
+  try {
+    await db.save();
+    log("Saved." + (db.mode === "opfs" ? " (no-op — OPFS is always durable)" : " Dirty pages flushed to IndexedDB."), "ok");
+  } catch(e) { log("FAIL: " + e.message, "err"); }
+};
+
+document.getElementById("btnExport").onclick = async function() {
+  try {
+    var blob = await db.export();
+    log("Exported " + blob.length + " bytes (encrypted).", "ok");
+
+    // Offer download
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([blob]));
+    a.download = "notes.db";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log("Download started.", "info");
+  } catch(e) { log("FAIL: " + e.message, "err"); }
+};
+
+document.getElementById("btnClear").onclick = async function() {
+  clear();
+  try {
+    await db.exec("DELETE FROM notes");
+    await db.save();
+    log("Cleared all rows.", "ok");
+  } catch(e) { log("FAIL: " + e.message, "err"); }
+};
+
+document.getElementById("btnShred").onclick = async function() {
+  clear();
+  try {
+    await db.shred();
+    disableButtons();
+    log("Database shredded — all storage overwritten with random data and deleted.", "ok");
+    log("Reload to create a fresh database.", "info");
+  } catch(e) { log("FAIL: " + e.message, "err"); }
+};
 </script>
 
 </body>

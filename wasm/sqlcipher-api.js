@@ -13,6 +13,7 @@
 //   await db.save();     // indexeddb: flush dirty pages. opfs: no-op.
 //   var blob = await db.export();   // Uint8Array — full encrypted DB
 //   await db.import(blob);          // restore from blob
+//   await db.shred();               // overwrite with random + delete
 //   await db.close();               // auto-saves on indexeddb
 //
 // Requires (same directory or adjust workerUrl):
@@ -105,6 +106,19 @@ var SQLCipher = (function() {
     return this._send(
       {type: "import", bytes: copy, filename: this.filename}, [copy]
     ).then(function() {});
+  };
+
+  /**
+   * Securely destroy the database.  Overwrites all stored blocks with
+   * random data, flushes to storage, then deletes.  Handle is unusable after.
+   * @returns {Promise<void>}
+   */
+  Handle.prototype.shred = function() {
+    var self = this;
+    return this._send({type: "shred"}).then(function() {
+      self._worker.terminate();
+      self._worker = null;
+    });
   };
 
   /**

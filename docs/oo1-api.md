@@ -567,6 +567,7 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 | `save()` | `Promise<void>` | **IndexedDB:** checkpoint WAL, flush dirty 4KB pages. **OPFS:** no-op. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
+| `shred()` | `Promise<void>` | Overwrite all stored blocks with random data, then delete. Handle is unusable after. |
 | `close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Handle is unusable after. |
 
 #### Handle properties
@@ -622,6 +623,7 @@ A 10 MB database with 1 changed page writes 4 KB on save, not 10 MB.
 | `save` | — | `{ok}` |
 | `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
 | `import` | `bytes` | `{ok}` |
+| `shred` | — | `{ok}` |
 | `close` | — | `{ok}` |
 
 ---
@@ -712,6 +714,21 @@ var blob = /* fetch from server, file input, etc. */;
 await db.import(blob);
 // Database is now restored from the blob
 ```
+
+### Shred (secure delete)
+
+`shred()` overwrites every stored block with `crypto.getRandomValues()`
+random data, flushes to storage, then deletes the file.  The handle is
+unusable after shred.
+
+```js
+await db.shred();
+// All OPFS/IndexedDB blocks overwritten with random, then deleted.
+// db is now closed and cannot be reused.
+```
+
+This is defense-in-depth — the data is already encrypted, but shred
+ensures the ciphertext itself is destroyed in storage.
 
 ---
 
