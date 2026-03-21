@@ -165,9 +165,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p dist
-          cp release/wasm/dist/sqlcipher.js dist/
-          cp release/wasm/dist/sqlcipher.wasm dist/
-          cp release/wasm/sqlcipher-oo1.js dist/
+          find release -type f -name '*.js' -o -name '*.wasm' | while read f; do cp "$f" dist/; done
           ls -lh dist/
 
       - name: Create release
