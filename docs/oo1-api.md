@@ -575,6 +575,7 @@ worker.onmessage = function(e) {
 | `open` | `filename`, `key` | `{ok}` |
 | `exec` | `sql`, `bind?` | `{ok, changes}` |
 | `select` | `sql`, `bind?` | `{ok, rows, names}` |
+| `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
 | `close` | — | `{ok}` |
 
 ### IndexedDB fallback (main thread)

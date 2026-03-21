@@ -109,6 +109,7 @@ var _opfs = {
 var Module;
 var _api;
 var _dbPtr = 0;
+var _currentFilename = null;
 
 async function init() {
   _opfsRoot = await navigator.storage.getDirectory();
@@ -218,6 +219,7 @@ async function handleMessage(msg) {
         // Store in Module for the C VFS to find
         if (!Module._opfs_preopen) Module._opfs_preopen = {};
         Module._opfs_preopen[msg.filename] = hid;
+        _currentFilename = msg.filename;
         _dbPtr = _api.open(msg.filename);
         if (msg.key) _api.key(_dbPtr, msg.key);
         postMessage({id: id, ok: true});
@@ -240,6 +242,16 @@ async function handleMessage(msg) {
       case "select":
         var result = _query(msg.sql, msg.bind);
         postMessage({id: id, ok: true, rows: result.rows, names: result.names});
+        break;
+
+      case "export":
+        // Checkpoint WAL, then read the OPFS file as a blob
+        _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
+        var hid = Module._opfs_preopen[msg.filename || _currentFilename];
+        var size = _handles[hid].sah.getSize();
+        var bytes = new Uint8Array(size);
+        _handles[hid].sah.read(bytes, {at: 0});
+        postMessage({id: id, ok: true, bytes: bytes}, [bytes.buffer]);
         break;
 
       case "close":
