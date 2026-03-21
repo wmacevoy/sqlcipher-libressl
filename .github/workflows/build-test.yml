@@ -140,12 +140,13 @@ jobs:
 
       - name: Package static libs for custom WASM builds
         run: |
-          mkdir -p wasm/dist/static
-          cp sqlite3.c sqlite3.h wasm/dist/static/
-          cp wasm/sqlcipher_wasm.c wasm/opfs_vfs.c wasm/dist/static/
-          cp $HOME/libressl-wasm/lib/libcrypto.a wasm/dist/static/libcrypto-wasm.a
-          cp -r $HOME/libressl/include/openssl wasm/dist/static/openssl
-          ls -lh wasm/dist/static/
+          mkdir -p static-pkg
+          cp sqlite3.c sqlite3.h static-pkg/
+          cp wasm/sqlcipher_wasm.c wasm/opfs_vfs.c static-pkg/
+          cp $HOME/libressl-wasm/lib/libcrypto.a static-pkg/libcrypto-wasm.a
+          cp -r $HOME/libressl/include/openssl static-pkg/openssl
+          tar czf wasm/dist/sqlcipher-wasm-static.tar.gz -C static-pkg .
+          ls -lh wasm/dist/sqlcipher-wasm-static.tar.gz
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
@@ -154,7 +155,7 @@ jobs:
           path: |
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
-            wasm/dist/static/
+            wasm/dist/sqlcipher-wasm-static.tar.gz
             wasm/sqlcipher-api.js
             wasm/sqlcipher-oo1.js
             wasm/sqlcipher-worker.js
@@ -178,14 +179,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p dist
-          find release -type f -name '*.js' -o -name '*.wasm' | while read f; do cp "$f" dist/; done
-          # Package static libs as a tarball for custom WASM builds
-          if [ -d release/wasm/dist/static ] || [ -d release/static ]; then
-            STATIC_DIR=$(find release -type d -name static | head -1)
-            if [ -n "$STATIC_DIR" ]; then
-              tar czf dist/sqlcipher-wasm-static.tar.gz -C "$STATIC_DIR" .
-            fi
-          fi
+          find release -type f \( -name '*.js' -o -name '*.wasm' -o -name '*.tar.gz' \) | while read f; do cp "$f" dist/; done
           ls -lh dist/
 
       - name: Create release
