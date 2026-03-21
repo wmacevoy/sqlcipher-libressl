@@ -11,8 +11,8 @@ Two patches, three files changed, zero new dependencies.
 
 ```bash
 # Install LibreSSL (if not already available)
-curl -sL https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.0.0.tar.gz | tar xz
-cd libressl-4.0.0 && mkdir build && cd build
+git clone --depth 1 --branch v4.2.1 https://github.com/libressl/portable.git libressl
+cd libressl && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
   -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 make -j$(nproc) && make install
