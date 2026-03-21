@@ -520,6 +520,51 @@ Returns `true` if the statement makes no direct changes to the database.
 
 ---
 
+## Persistence
+
+The database lives in Emscripten's in-memory filesystem (MEMFS).
+To persist across page reloads, export the encrypted bytes and
+store them in IndexedDB.
+
+### Export
+
+```javascript
+var bytes = db.exportDatabase();  // Uint8Array — the encrypted SQLite file
+```
+
+### Save to IndexedDB
+
+```javascript
+await DB.saveToIndexedDB("myapp", bytes);
+```
+
+### Load from IndexedDB
+
+```javascript
+var bytes = await DB.loadFromIndexedDB("myapp");  // Uint8Array or null
+if (bytes) {
+  db = new DB(Module, {filename: "/myapp.db", key: "secret", bytes: bytes});
+} else {
+  db = new DB(Module, {filename: "/myapp.db", key: "secret"});
+  db.exec("CREATE TABLE ...");
+}
+```
+
+### Constructor `bytes` option
+
+When `bytes` is provided, the constructor writes the bytes to MEMFS
+at `filename` before opening.  This restores the encrypted database.
+The `key` is then applied as usual — if the key is wrong, the first
+query will fail with `SQLITE_NOTADB`.
+
+### What's stored
+
+The blob in IndexedDB is the raw SQLite file — encrypted by SQLCipher.
+Without the key, the bytes are opaque.  This is encryption at rest
+in the browser.
+
+---
+
 ## Differences from official sqlite3 WASM oo1
 
 | Feature | Official oo1 | SQLCipher WASM oo1 |

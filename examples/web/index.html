@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SQLCipher WASM — Encrypted SQLite in the Browser</title>
+<title>SQLCipher WASM — Encrypted Persistent SQLite in the Browser</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
   h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-  p.sub { color: #666; margin-bottom: 1.5rem; }
+  p.sub { color: #666; margin-bottom: 1.5rem; font-size: 0.95rem; }
   .section { margin-bottom: 1.5rem; }
   label { display: block; font-weight: 600; margin-bottom: 0.3rem; }
   input { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95rem; width: 100%; max-width: 300px; }
@@ -26,9 +26,9 @@
 <body>
 
 <h1>SQLCipher WASM</h1>
-<p class="sub">Encrypted SQLite in the browser via the
-  <a href="https://sqlite.org/wasm/doc/trunk/api-oo1.md">sqlite3 oo1 API</a>.
-  LibreSSL crypto. Zero server dependency.</p>
+<p class="sub">Encrypted SQLite in the browser.  Data persists in IndexedDB as
+  an encrypted blob.  Reload the page — your data survives.
+  <a href="https://sqlite.org/wasm/doc/trunk/api-oo1.md">oo1 API</a> compatible.</p>
 
 <div class="section">
   <label>Encryption key</label>
@@ -36,18 +36,16 @@
 </div>
 
 <div class="section">
-  <button id="btnCreate" disabled>Create encrypted DB</button>
   <button id="btnInsert" disabled>Insert row</button>
   <button id="btnQuery" disabled>Query all</button>
-  <button id="btnTransaction" disabled>Transaction</button>
-  <button id="btnWrongKey" class="danger" disabled>Try wrong key</button>
+  <button id="btnClear" class="danger" disabled>Clear database</button>
 </div>
 
 <div id="log">Loading SQLCipher WASM...</div>
 
 <!-- Emscripten-generated JS — defines initSqlcipher() -->
 <script src="sqlcipher.js"></script>
-<!-- oo1 API shim — defines DB class -->
+<!-- oo1 API shim — defines DB class with IndexedDB persistence -->
 <script src="oo1.js"></script>
 
 <script>
@@ -62,139 +60,112 @@ function log(msg, cls) {
 function clear() { logEl.innerHTML = ""; }
 
 var db = null;
+var Module = null;
+var DB_NAME = "demo";
+var DB_FILE = "/demo.db";
 
-// ── Button handlers using oo1 API ──────────────────────────
+// ── Save to IndexedDB after every mutation ─────────────────
 
-document.getElementById("btnCreate").onclick = function() {
-  clear();
-  var key = document.getElementById("key").value;
-  try {
-    if (db) db.close();
-    db = new DB(window._Module, {filename: ":memory:", key: key});
+function save() {
+  if (!db || !db.isOpen()) return;
+  var bytes = db.exportDatabase();
+  DB.saveToIndexedDB(DB_NAME, bytes);
+  log("  (saved " + bytes.length + " bytes to IndexedDB)", "info");
+}
 
-    db.exec("CREATE TABLE sensors (id TEXT PRIMARY KEY, value REAL, ts INTEGER)");
-    log("Created encrypted database (key: " + key.substring(0, 8) + "...)", "ok");
+// ── Show current rows ──────────────────────────────────────
 
-    // Insert with parameterized exec
-    db.exec({
-      sql: "INSERT INTO sensors VALUES (?,?,?)",
-      bind: ["temp_kitchen", 22.5, 1710000000]
-    });
-    db.exec({
-      sql: "INSERT INTO sensors VALUES (?,?,?)",
-      bind: ["temp_bedroom", 18.3, 1710000001]
-    });
-    db.exec({
-      sql: "INSERT INTO sensors VALUES (?,?,?)",
-      bind: ["humidity", 0.65, 1710000002]
-    });
-    log("Inserted 3 rows via exec({sql, bind})", "ok");
-
-    // Query with selectObjects
-    var rows = db.selectObjects("SELECT * FROM sensors ORDER BY id");
-    log("\nselectObjects:", "info");
+function showRows() {
+  var rows = db.selectObjects("SELECT * FROM notes ORDER BY created DESC");
+  if (rows.length === 0) {
+    log("  (no rows yet)", "info");
+  } else {
     rows.forEach(function(r) {
-      log("  " + r.id + " = " + r.value + " (ts: " + r.ts + ")");
+      log("  [" + r.id + "] " + r.text + "  (" + new Date(r.created).toLocaleTimeString() + ")");
     });
-
-    // Query with selectValue
-    var count = db.selectValue("SELECT count(*) FROM sensors");
-    log("\nselectValue(count): " + count, "ok");
-
-  } catch(e) {
-    log("FAIL: " + e.message, "err");
   }
-};
+  log("  " + rows.length + " row(s)", "ok");
+}
 
-var rowCounter = 3;
+// ── Open or restore database ───────────────────────────────
+
+async function openDB() {
+  var key = document.getElementById("key").value;
+
+  // Try to load existing encrypted database from IndexedDB
+  var bytes = await DB.loadFromIndexedDB(DB_NAME);
+
+  if (bytes) {
+    log("Restoring encrypted database from IndexedDB (" + bytes.length + " bytes)...", "info");
+    db = new DB(Module, {filename: DB_FILE, key: key, bytes: bytes});
+    log("Database restored. Data survived page reload.", "ok");
+  } else {
+    log("No saved database found. Creating fresh...", "info");
+    db = new DB(Module, {filename: DB_FILE, key: key});
+    db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)");
+    save();
+    log("Created encrypted database.", "ok");
+  }
+
+  showRows();
+}
+
+// ── Button handlers ────────────────────────────────────────
+
+var counter = 0;
+var phrases = [
+  "The sky is clear", "Wind from the north", "Temperature rising",
+  "Pressure dropping", "Humidity at 65%", "Sensor calibrated",
+  "Battery at 80%", "Signal strong", "All systems nominal",
+  "Awaiting input", "Data collected", "Threshold exceeded"
+];
+
 document.getElementById("btnInsert").onclick = function() {
-  if (!db || !db.isOpen()) { log("No database open", "err"); return; }
-  rowCounter++;
-  var id = "sensor_" + rowCounter;
-  var val = Math.round(Math.random() * 400) / 10;
+  if (!db || !db.isOpen()) return;
+  counter++;
+  var text = phrases[counter % phrases.length] + " #" + counter;
   try {
-    // Use prepare/bind/stepFinalize
-    var stmt = db.prepare("INSERT INTO sensors VALUES (?,?,?)");
-    stmt.bind([id, val, Date.now()]);
-    stmt.stepFinalize();
-    log("Inserted: " + id + " = " + val + " (via prepare/bind/stepFinalize)", "ok");
+    db.exec({
+      sql: "INSERT INTO notes (text, created) VALUES (?, ?)",
+      bind: [text, Date.now()]
+    });
+    log("Inserted: " + text, "ok");
+    save();
   } catch(e) {
     log("FAIL: " + e.message, "err");
   }
 };
 
 document.getElementById("btnQuery").onclick = function() {
-  if (!db || !db.isOpen()) { log("No database open", "err"); return; }
-  try {
-    // Use prepare/step/get loop
-    log("prepare + step + get({}):", "info");
-    var stmt = db.prepare("SELECT * FROM sensors ORDER BY id");
-    while (stmt.step()) {
-      var row = stmt.get({});
-      log("  " + row.id + " = " + row.value);
-    }
-    stmt.finalize();
-
-    log("changes(total): " + db.changes(true), "info");
-  } catch(e) {
-    log("FAIL: " + e.message, "err");
-  }
-};
-
-document.getElementById("btnTransaction").onclick = function() {
-  if (!db || !db.isOpen()) { log("No database open", "err"); return; }
-  try {
-    var result = db.transaction(function() {
-      db.exec({sql: "INSERT INTO sensors VALUES (?,?,?)",
-               bind: ["txn_1", 99.9, Date.now()]});
-      db.exec({sql: "INSERT INTO sensors VALUES (?,?,?)",
-               bind: ["txn_2", 88.8, Date.now()]});
-      return db.selectValue("SELECT count(*) FROM sensors");
-    });
-    log("Transaction committed. Total rows: " + result, "ok");
-  } catch(e) {
-    log("FAIL: " + e.message, "err");
-  }
-};
-
-document.getElementById("btnWrongKey").onclick = function() {
+  if (!db || !db.isOpen()) return;
   clear();
-  try {
-    // Close and reopen with wrong key
-    if (db) db.close();
-    db = new DB(window._Module, {filename: ":memory:", key: "wrong-key"});
-    db.exec("CREATE TABLE t (x)");
-    // In-memory DBs always work (no persistence), so this proves
-    // the API works — real encryption verification needs file-backed DBs.
-    log("In-memory DB opened with different key (expected — :memory: is ephemeral)", "info");
-    log("File-backed encryption requires OPFS or server-side storage.", "info");
-    db.close();
-
-    // Reopen with correct key
-    var key = document.getElementById("key").value;
-    db = new DB(window._Module, {filename: ":memory:", key: key});
-    db.exec("CREATE TABLE sensors (id TEXT PRIMARY KEY, value REAL, ts INTEGER)");
-    log("\nReopened with correct key.", "ok");
-  } catch(e) {
-    log("Error: " + e.message, "err");
-  }
+  log("SELECT * FROM notes ORDER BY created DESC:", "info");
+  showRows();
 };
 
-// ── Load WASM ──────────────────────────────────────────────
+document.getElementById("btnClear").onclick = function() {
+  if (!db || !db.isOpen()) return;
+  clear();
+  db.exec("DELETE FROM notes");
+  save();
+  log("Cleared all rows.", "ok");
+};
+
+// ── Load WASM and open database ────────────────────────────
 
 (async function() {
   try {
-    window._Module = await initSqlcipher();
-    log("SQLCipher WASM loaded", "ok");
-    log("oo1 API ready (DB, Stmt, exec, prepare, select*, transaction)\n", "info");
+    Module = await initSqlcipher();
+    log("SQLCipher WASM loaded.", "ok");
 
-    document.getElementById("btnCreate").disabled = false;
+    await openDB();
+    log("\nReload the page to verify persistence.\n", "info");
+
     document.getElementById("btnInsert").disabled = false;
     document.getElementById("btnQuery").disabled = false;
-    document.getElementById("btnTransaction").disabled = false;
-    document.getElementById("btnWrongKey").disabled = false;
+    document.getElementById("btnClear").disabled = false;
   } catch(e) {
-    log("Failed to load WASM: " + e.message, "err");
+    log("FAIL: " + e.message, "err");
     log("Build the WASM module first — see README.", "info");
   }
 })();

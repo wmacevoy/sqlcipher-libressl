@@ -14,7 +14,14 @@
 //   db.close();
 //
 // SQLCipher encryption:
-//   var db = new DB(Module, {filename: ":memory:", key: "secret"});
+//   var db = new DB(Module, {filename: "/app.db", key: "secret"});
+//
+// Persistence (IndexedDB):
+//   var bytes = db.exportDatabase();
+//   await DB.saveToIndexedDB("myapp", bytes);
+//   // ... page reload ...
+//   var bytes = await DB.loadFromIndexedDB("myapp");
+//   var db = new DB(Module, {filename: "/app.db", key: "secret", bytes: bytes});
 // ============================================================
 
 function DB(Module, opts) {
@@ -47,6 +54,17 @@ function DB(Module, opts) {
     col_double:       Module.cwrap("wasm_stmt_double",              "number",  ["number", "number"]),
     col_text:         Module.cwrap("wasm_stmt_text",                "string",  ["number", "number"])
   };
+
+  var _Module = Module;
+
+  // If loading from bytes, write to MEMFS first
+  if (opts.bytes) {
+    var dir = filename.substring(0, filename.lastIndexOf("/"));
+    if (dir) {
+      try { _Module.FS.mkdirTree(dir); } catch(e) {}
+    }
+    _Module.FS.writeFile(filename, opts.bytes);
+  }
 
   var _ptr = _api.open(filename);
   var _stmts = [];  // track open statements for close()
@@ -418,7 +436,63 @@ function DB(Module, opts) {
     if (type === 3) return _api.col_text(ptr, c);    // TEXT
     return null;                                      // NULL or BLOB
   }
+
+  // ── Export / Import (persistence) ──────────────────────────
+  //
+  // The database file lives in Emscripten's MEMFS.  exportDatabase()
+  // reads the encrypted bytes.  Pass {bytes} to the constructor to
+  // restore.  Store the bytes in IndexedDB or localStorage.
+
+  this.exportDatabase = function() {
+    self.affirmOpen();
+    // Checkpoint WAL to ensure all data is in the main file
+    _api.exec(_ptr, "PRAGMA wal_checkpoint(TRUNCATE)");
+    return _Module.FS.readFile(self.filename);
+  };
 }
+
+// ── IndexedDB persistence helpers ────────────────────────────
+//
+// Usage:
+//   // Save
+//   var bytes = db.exportDatabase();
+//   await DB.saveToIndexedDB("myapp", bytes);
+//
+//   // Load
+//   var bytes = await DB.loadFromIndexedDB("myapp");
+//   var db = new DB(Module, {filename: "/myapp.db", key: "secret", bytes: bytes});
+
+DB.saveToIndexedDB = function(name, bytes) {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open("sqlcipher_store", 1);
+    req.onupgradeneeded = function() {
+      req.result.createObjectStore("databases");
+    };
+    req.onsuccess = function() {
+      var tx = req.result.transaction("databases", "readwrite");
+      tx.objectStore("databases").put(bytes, name);
+      tx.oncomplete = function() { req.result.close(); resolve(); };
+      tx.onerror = function() { req.result.close(); reject(tx.error); };
+    };
+    req.onerror = function() { reject(req.error); };
+  });
+};
+
+DB.loadFromIndexedDB = function(name) {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open("sqlcipher_store", 1);
+    req.onupgradeneeded = function() {
+      req.result.createObjectStore("databases");
+    };
+    req.onsuccess = function() {
+      var tx = req.result.transaction("databases", "readonly");
+      var get = tx.objectStore("databases").get(name);
+      get.onsuccess = function() { req.result.close(); resolve(get.result || null); };
+      get.onerror = function() { req.result.close(); reject(get.error); };
+    };
+    req.onerror = function() { reject(req.error); };
+  });
+};
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports.DB = DB;
