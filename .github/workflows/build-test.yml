@@ -16,7 +16,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y tcl cmake
+          sudo apt-get install -y tcl tcl-dev cmake
 
       - name: Download and build LibreSSL
         run: |
