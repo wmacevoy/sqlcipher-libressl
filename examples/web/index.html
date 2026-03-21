@@ -64,15 +64,6 @@ var Module = null;
 var DB_NAME = "demo";
 var DB_FILE = "/demo.db";
 
-// ── Save to IndexedDB after every mutation ─────────────────
-
-function save() {
-  if (!db || !db.isOpen()) return;
-  var bytes = db.exportDatabase();
-  DB.saveToIndexedDB(DB_NAME, bytes);
-  log("  (saved " + bytes.length + " bytes to IndexedDB)", "info");
-}
-
 // ── Show current rows ──────────────────────────────────────
 
 function showRows() {
@@ -92,19 +83,15 @@ function showRows() {
 async function openDB() {
   var key = document.getElementById("key").value;
 
-  // Try to load existing encrypted database from IndexedDB
-  var bytes = await DB.loadFromIndexedDB(DB_NAME);
+  // DB.load: restores from IndexedDB if saved, fresh otherwise
+  db = await DB.load(Module, {filename: DB_FILE, key: key, store: DB_NAME});
 
-  if (bytes) {
-    log("Restoring encrypted database from IndexedDB (" + bytes.length + " bytes)...", "info");
-    db = new DB(Module, {filename: DB_FILE, key: key, bytes: bytes});
-    log("Database restored. Data survived page reload.", "ok");
+  if (db.selectValue("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='notes'")) {
+    log("Database restored from IndexedDB. Data survived page reload.", "ok");
   } else {
-    log("No saved database found. Creating fresh...", "info");
-    db = new DB(Module, {filename: DB_FILE, key: key});
     db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)");
-    save();
-    log("Created encrypted database.", "ok");
+    await db.save();
+    log("Created fresh encrypted database.", "ok");
   }
 
   showRows();
@@ -130,7 +117,7 @@ document.getElementById("btnInsert").onclick = function() {
       bind: [text, Date.now()]
     });
     log("Inserted: " + text, "ok");
-    save();
+    db.save();
   } catch(e) {
     log("FAIL: " + e.message, "err");
   }

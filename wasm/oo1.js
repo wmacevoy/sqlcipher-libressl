@@ -17,11 +17,9 @@
 //   var db = new DB(Module, {filename: "/app.db", key: "secret"});
 //
 // Persistence (IndexedDB):
-//   var bytes = db.exportDatabase();
-//   await DB.saveToIndexedDB("myapp", bytes);
-//   // ... page reload ...
-//   var bytes = await DB.loadFromIndexedDB("myapp");
-//   var db = new DB(Module, {filename: "/app.db", key: "secret", bytes: bytes});
+//   var db = await DB.load(Module, {filename: "/app.db", key: "secret", store: "myapp"});
+//   db.exec("INSERT INTO ...");
+//   await db.save();
 // ============================================================
 
 function DB(Module, opts) {
@@ -73,6 +71,8 @@ function DB(Module, opts) {
   this.filename = filename;
   this.pointer = _ptr;
   this.onclose = {before: [], after: []};
+
+  var _store = opts.store || null;  // IndexedDB key for persistence
 
   // SQLCipher: apply key immediately after open
   if (opts.key) _api.key(_ptr, opts.key);
@@ -437,32 +437,45 @@ function DB(Module, opts) {
     return null;                                      // NULL or BLOB
   }
 
-  // ── Export / Import (persistence) ──────────────────────────
+  // ── Persistence ─────────────────────────────────────────────
   //
-  // The database file lives in Emscripten's MEMFS.  exportDatabase()
-  // reads the encrypted bytes.  Pass {bytes} to the constructor to
-  // restore.  Store the bytes in IndexedDB or localStorage.
+  // The database file lives in Emscripten's MEMFS.
+  //
+  //   db.exportDatabase()  → Uint8Array (the encrypted file)
+  //   await db.save()      → export + store to IndexedDB (needs {store} option)
+  //
+  // Restore:
+  //   var db = await DB.load(Module, {filename, key, store});
 
   this.exportDatabase = function() {
     self.affirmOpen();
-    // Checkpoint WAL to ensure all data is in the main file
     _api.exec(_ptr, "PRAGMA wal_checkpoint(TRUNCATE)");
     return _Module.FS.readFile(self.filename);
   };
+
+  this.save = function() {
+    if (!_store) throw new Error("No store name — pass {store: 'name'} to constructor");
+    var bytes = self.exportDatabase();
+    return DB._idbPut(_store, bytes);
+  };
 }
 
-// ── IndexedDB persistence helpers ────────────────────────────
+// ── Static: load from IndexedDB ──────────────────────────────
 //
-// Usage:
-//   // Save
-//   var bytes = db.exportDatabase();
-//   await DB.saveToIndexedDB("myapp", bytes);
-//
-//   // Load
-//   var bytes = await DB.loadFromIndexedDB("myapp");
-//   var db = new DB(Module, {filename: "/myapp.db", key: "secret", bytes: bytes});
+//   var db = await DB.load(Module, {filename: "/app.db", key: "secret", store: "myapp"});
+//   // Returns a DB restored from IndexedDB, or a fresh one if none saved.
 
-DB.saveToIndexedDB = function(name, bytes) {
+DB.load = function(Module, opts) {
+  if (!opts || !opts.store) throw new Error("opts.store required");
+  return DB._idbGet(opts.store).then(function(bytes) {
+    if (bytes) opts.bytes = bytes;
+    return new DB(Module, opts);
+  });
+};
+
+// ── IndexedDB internals ──────────────────────────────────────
+
+DB._idbPut = function(name, bytes) {
   return new Promise(function(resolve, reject) {
     var req = indexedDB.open("sqlcipher_store", 1);
     req.onupgradeneeded = function() {
@@ -478,7 +491,7 @@ DB.saveToIndexedDB = function(name, bytes) {
   });
 };
 
-DB.loadFromIndexedDB = function(name) {
+DB._idbGet = function(name) {
   return new Promise(function(resolve, reject) {
     var req = indexedDB.open("sqlcipher_store", 1);
     req.onupgradeneeded = function() {

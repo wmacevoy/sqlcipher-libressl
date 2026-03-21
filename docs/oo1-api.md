@@ -522,40 +522,53 @@ Returns `true` if the statement makes no direct changes to the database.
 
 ## Persistence
 
-The database lives in Emscripten's in-memory filesystem (MEMFS).
-To persist across page reloads, export the encrypted bytes and
-store them in IndexedDB.
+The database file lives in Emscripten's in-memory filesystem (MEMFS).
+To persist across page reloads, the encrypted bytes are stored in
+IndexedDB.  Each database has its own `store` name.
 
-### Export
-
-```javascript
-var bytes = db.exportDatabase();  // Uint8Array — the encrypted SQLite file
-```
-
-### Save to IndexedDB
+### Open or restore
 
 ```javascript
-await DB.saveToIndexedDB("myapp", bytes);
+// DB.load: restores from IndexedDB if saved, creates fresh otherwise
+var db = await DB.load(Module, {
+  filename: "/app.db",
+  key: "secret",
+  store: "myapp"       // IndexedDB key — each database gets its own
+});
 ```
 
-### Load from IndexedDB
+### Save after mutations
 
 ```javascript
-var bytes = await DB.loadFromIndexedDB("myapp");  // Uint8Array or null
-if (bytes) {
-  db = new DB(Module, {filename: "/myapp.db", key: "secret", bytes: bytes});
-} else {
-  db = new DB(Module, {filename: "/myapp.db", key: "secret"});
-  db.exec("CREATE TABLE ...");
-}
+db.exec({sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
+await db.save();   // exports encrypted bytes → IndexedDB
 ```
 
-### Constructor `bytes` option
+`db.save()` calls `exportDatabase()` internally and stores the
+result under the `store` name passed to the constructor.
 
-When `bytes` is provided, the constructor writes the bytes to MEMFS
-at `filename` before opening.  This restores the encrypted database.
-The `key` is then applied as usual — if the key is wrong, the first
-query will fail with `SQLITE_NOTADB`.
+### Multiple independent databases
+
+```javascript
+var users = await DB.load(Module, {filename: "/users.db", key: k, store: "users"});
+var logs  = await DB.load(Module, {filename: "/logs.db",  key: k, store: "logs"});
+
+users.exec("INSERT INTO ...");
+await users.save();   // only saves users.db
+
+logs.exec("INSERT INTO ...");
+await logs.save();    // only saves logs.db
+```
+
+### Low-level access
+
+```javascript
+var bytes = db.exportDatabase();   // Uint8Array — the encrypted SQLite file
+// Store bytes however you want (IndexedDB, fetch to server, etc.)
+
+// Restore from bytes directly
+var db = new DB(Module, {filename: "/app.db", key: "secret", bytes: bytes});
+```
 
 ### What's stored
 
