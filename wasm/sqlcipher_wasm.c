@@ -2,8 +2,11 @@
  * sqlcipher_wasm.c — C helpers for SQLCipher WASM
  *
  * Includes the SQLCipher amalgamation and adds thin wrappers
- * that reduce JS↔WASM boundary crossings.  Handles string
+ * that reduce JS<->WASM boundary crossings.  Handles string
  * copying (SQLITE_TRANSIENT) so JS never manages WASM memory.
+ *
+ * The JS shim (oo1.js) matches the official sqlite3 WASM oo1 API:
+ *   https://sqlite.org/wasm/doc/trunk/api-oo1.md
  *
  * Compiled by Emscripten:
  *   emcc sqlcipher_wasm.c -O2 -s WASM=1 ... -o sqlcipher.js
@@ -35,6 +38,10 @@ int wasm_db_changes(sqlite3 *db) {
     return sqlite3_changes(db);
 }
 
+int wasm_db_total_changes(sqlite3 *db) {
+    return sqlite3_total_changes(db);
+}
+
 /* ── Statements ────────────────────────────────────────────── */
 
 sqlite3_stmt *wasm_db_prepare(sqlite3 *db, const char *sql) {
@@ -49,6 +56,10 @@ void wasm_stmt_finalize(sqlite3_stmt *stmt) {
 
 void wasm_stmt_reset(sqlite3_stmt *stmt) {
     sqlite3_reset(stmt);
+}
+
+void wasm_stmt_clear_bindings(sqlite3_stmt *stmt) {
+    sqlite3_clear_bindings(stmt);
 }
 
 int wasm_stmt_step(sqlite3_stmt *stmt) {
@@ -71,6 +82,10 @@ void wasm_stmt_bind_double(sqlite3_stmt *stmt, int i, double v) {
 
 void wasm_stmt_bind_null(sqlite3_stmt *stmt, int i) {
     sqlite3_bind_null(stmt, i);
+}
+
+int wasm_stmt_bind_parameter_count(sqlite3_stmt *stmt) {
+    return sqlite3_bind_parameter_count(stmt);
 }
 
 /* ── Column access ─────────────────────────────────────────── */

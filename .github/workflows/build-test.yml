@@ -104,7 +104,7 @@ jobs:
           cp sqlite3.h wasm/dist/
           cp wasm/sqlcipher_wasm.c wasm/dist/
 
-          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_malloc","_free"]'
+          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_total_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_clear_bindings","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_bind_parameter_count","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_malloc","_free"]'
           RUNTIME='["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
 
           cd wasm/dist
@@ -143,5 +143,6 @@ jobs:
           path: |
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
+            wasm/oo1.js
             examples/web/index.html
           retention-days: 90
