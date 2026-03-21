@@ -522,59 +522,90 @@ Returns `true` if the statement makes no direct changes to the database.
 
 ## Persistence
 
-The database file lives in Emscripten's in-memory filesystem (MEMFS).
-To persist across page reloads, the encrypted bytes are stored in
-IndexedDB.  Each database has its own `store` name.
+Two modes.  OPFS is preferred — every COMMIT is durable automatically.
 
-### Open or restore
+### OPFS VFS (recommended)
+
+The database file lives directly in the Origin Private File System.
+Every `COMMIT` writes encrypted pages to OPFS via
+`FileSystemSyncAccessHandle`.  No manual save.  Survives tab close,
+crash, browser restart.
+
+Requires a **Web Worker** (the sync access handle API is Worker-only).
+The main thread sends commands via `postMessage`.
+
+```html
+<script src="sqlcipher.js"></script>
+<script>
+var worker = new Worker("sqlcipher-worker.js");
+var _id = 0, _pending = {};
+
+function send(msg) {
+  return new Promise(function(resolve, reject) {
+    msg.id = ++_id;
+    _pending[msg.id] = {resolve: resolve, reject: reject};
+    worker.postMessage(msg);
+  });
+}
+
+worker.onmessage = function(e) {
+  var p = _pending[e.data.id];
+  delete _pending[e.data.id];
+  if (e.data.ok) p.resolve(e.data);
+  else p.reject(new Error(e.data.error));
+};
+
+(async function() {
+  await send({type: "init"});
+  await send({type: "open", filename: "/app.db", key: "secret"});
+  await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS t (x TEXT)"});
+  await send({type: "exec", sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
+  var result = await send({type: "select", sql: "SELECT * FROM t"});
+  console.log(result.rows);
+  // Reload the page — data is already persisted. No save() needed.
+})();
+</script>
+```
+
+### Worker message protocol
+
+| Message | Fields | Response |
+|---------|--------|----------|
+| `init` | — | `{ok}` |
+| `open` | `filename`, `key` | `{ok}` |
+| `exec` | `sql`, `bind?` | `{ok, changes}` |
+| `select` | `sql`, `bind?` | `{ok, rows, names}` |
+| `close` | — | `{ok}` |
+
+### IndexedDB fallback (main thread)
+
+For environments without OPFS or when a Worker isn't practical,
+use the main-thread oo1 shim with explicit `db.save()`:
 
 ```javascript
-// DB.load: restores from IndexedDB if saved, creates fresh otherwise
 var db = await DB.load(Module, {
   filename: "/app.db",
   key: "secret",
-  store: "myapp"       // IndexedDB key — each database gets its own
+  store: "myapp"
 });
-```
-
-### Save after mutations
-
-```javascript
 db.exec({sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
 await db.save();   // exports encrypted bytes → IndexedDB
 ```
 
-`db.save()` calls `exportDatabase()` internally and stores the
-result under the `store` name passed to the constructor.
+### Comparison
 
-### Multiple independent databases
-
-```javascript
-var users = await DB.load(Module, {filename: "/users.db", key: k, store: "users"});
-var logs  = await DB.load(Module, {filename: "/logs.db",  key: k, store: "logs"});
-
-users.exec("INSERT INTO ...");
-await users.save();   // only saves users.db
-
-logs.exec("INSERT INTO ...");
-await logs.save();    // only saves logs.db
-```
-
-### Low-level access
-
-```javascript
-var bytes = db.exportDatabase();   // Uint8Array — the encrypted SQLite file
-// Store bytes however you want (IndexedDB, fetch to server, etc.)
-
-// Restore from bytes directly
-var db = new DB(Module, {filename: "/app.db", key: "secret", bytes: bytes});
-```
+| | OPFS VFS | IndexedDB |
+|-|----------|-----------|
+| Durability | Every COMMIT | On `save()` call |
+| Write cost | 4KB per changed page | Entire database blob |
+| Tab crash | Data safe | Data since last `save()` lost |
+| Thread | Worker required | Main thread OK |
+| Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
 
 ### What's stored
 
-The blob in IndexedDB is the raw SQLite file — encrypted by SQLCipher.
-Without the key, the bytes are opaque.  This is encryption at rest
-in the browser.
+Both modes store encrypted bytes.  Without the key, the data is
+opaque.  This is encryption at rest in the browser.
 
 ---
 

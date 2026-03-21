@@ -25,10 +25,10 @@
 </head>
 <body>
 
-<h1>SQLCipher WASM</h1>
-<p class="sub">Encrypted SQLite in the browser.  Data persists in IndexedDB as
-  an encrypted blob.  Reload the page — your data survives.
-  <a href="https://sqlite.org/wasm/doc/trunk/api-oo1.md">oo1 API</a> compatible.</p>
+<h1>SQLCipher WASM + OPFS</h1>
+<p class="sub">Encrypted SQLite in the browser.  Data persists in the
+  Origin Private File System — every COMMIT is durable.  No manual save.
+  Reload the page, close the tab, even crash — your data survives.</p>
 
 <div class="section">
   <label>Encryption key</label>
@@ -43,11 +43,6 @@
 
 <div id="log">Loading SQLCipher WASM...</div>
 
-<!-- Emscripten-generated JS — defines initSqlcipher() -->
-<script src="sqlcipher.js"></script>
-<!-- oo1 API shim — defines DB class with IndexedDB persistence -->
-<script src="sqlcipher-oo1.js"></script>
-
 <script>
 var logEl = document.getElementById("log");
 function log(msg, cls) {
@@ -59,45 +54,42 @@ function log(msg, cls) {
 }
 function clear() { logEl.innerHTML = ""; }
 
-var db = null;
-var Module = null;
-var DB_NAME = "demo";
-var DB_FILE = "/demo.db";
+// ── Worker communication ─────────────────────────────────────
 
-// ── Show current rows ──────────────────────────────────────
+var worker = new Worker("sqlcipher-worker.js");
+var _id = 0, _pending = {};
 
-function showRows() {
-  var rows = db.selectObjects("SELECT * FROM notes ORDER BY created DESC");
-  if (rows.length === 0) {
+function send(msg) {
+  return new Promise(function(resolve, reject) {
+    msg.id = ++_id;
+    _pending[msg.id] = {resolve: resolve, reject: reject};
+    worker.postMessage(msg);
+  });
+}
+
+worker.onmessage = function(e) {
+  var p = _pending[e.data.id];
+  if (!p) return;
+  delete _pending[e.data.id];
+  if (e.data.ok) p.resolve(e.data);
+  else p.reject(new Error(e.data.error));
+};
+
+// ── Show rows ────────────────────────────────────────────────
+
+async function showRows() {
+  var result = await send({type: "select", sql: "SELECT * FROM notes ORDER BY created DESC"});
+  if (result.rows.length === 0) {
     log("  (no rows yet)", "info");
   } else {
-    rows.forEach(function(r) {
+    result.rows.forEach(function(r) {
       log("  [" + r.id + "] " + r.text + "  (" + new Date(r.created).toLocaleTimeString() + ")");
     });
   }
-  log("  " + rows.length + " row(s)", "ok");
+  log("  " + result.rows.length + " row(s)", "ok");
 }
 
-// ── Open or restore database ───────────────────────────────
-
-async function openDB() {
-  var key = document.getElementById("key").value;
-
-  // DB.load: restores from IndexedDB if saved, fresh otherwise
-  db = await DB.load(Module, {filename: DB_FILE, key: key, store: DB_NAME});
-
-  if (db.selectValue("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='notes'")) {
-    log("Database restored from IndexedDB. Data survived page reload.", "ok");
-  } else {
-    db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)");
-    await db.save();
-    log("Created fresh encrypted database.", "ok");
-  }
-
-  showRows();
-}
-
-// ── Button handlers ────────────────────────────────────────
+// ── Button handlers ──────────────────────────────────────────
 
 var counter = 0;
 var phrases = [
@@ -107,53 +99,64 @@ var phrases = [
   "Awaiting input", "Data collected", "Threshold exceeded"
 ];
 
-document.getElementById("btnInsert").onclick = function() {
-  if (!db || !db.isOpen()) return;
+document.getElementById("btnInsert").onclick = async function() {
   counter++;
   var text = phrases[counter % phrases.length] + " #" + counter;
   try {
-    db.exec({
-      sql: "INSERT INTO notes (text, created) VALUES (?, ?)",
-      bind: [text, Date.now()]
-    });
-    log("Inserted: " + text, "ok");
-    db.save();
+    await send({type: "exec", sql: "INSERT INTO notes (text, created) VALUES (?, ?)", bind: [text, Date.now()]});
+    log("Inserted: " + text + "  (durable — persisted to OPFS)", "ok");
   } catch(e) {
     log("FAIL: " + e.message, "err");
   }
 };
 
-document.getElementById("btnQuery").onclick = function() {
-  if (!db || !db.isOpen()) return;
+document.getElementById("btnQuery").onclick = async function() {
   clear();
   log("SELECT * FROM notes ORDER BY created DESC:", "info");
-  showRows();
+  await showRows();
 };
 
-document.getElementById("btnClear").onclick = function() {
-  if (!db || !db.isOpen()) return;
+document.getElementById("btnClear").onclick = async function() {
   clear();
-  db.exec("DELETE FROM notes");
-  save();
-  log("Cleared all rows.", "ok");
+  try {
+    await send({type: "exec", sql: "DELETE FROM notes"});
+    log("Cleared all rows.", "ok");
+  } catch(e) {
+    log("FAIL: " + e.message, "err");
+  }
 };
 
-// ── Load WASM and open database ────────────────────────────
+// ── Init ─────────────────────────────────────────────────────
 
 (async function() {
   try {
-    Module = await initSqlcipher();
-    log("SQLCipher WASM loaded.", "ok");
+    log("Initializing SQLCipher WASM + OPFS VFS...", "info");
+    await send({type: "init"});
+    log("WASM loaded. OPFS VFS registered.", "ok");
 
-    await openDB();
-    log("\nReload the page to verify persistence.\n", "info");
+    var key = document.getElementById("key").value;
+    await send({type: "open", filename: "/notes.db", key: key});
+
+    // Create table if fresh database
+    await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT, created INTEGER)"});
+
+    // Check if we have existing data
+    var result = await send({type: "select", sql: "SELECT count(*) as n FROM notes"});
+    if (result.rows[0].n > 0) {
+      log("Database restored from OPFS. " + result.rows[0].n + " rows survived.", "ok");
+    } else {
+      log("Fresh encrypted database created.", "ok");
+    }
+
+    await showRows();
+    log("\nReload the page — data persists automatically.\nNo save() needed. Every INSERT is durable.\n", "info");
 
     document.getElementById("btnInsert").disabled = false;
     document.getElementById("btnQuery").disabled = false;
     document.getElementById("btnClear").disabled = false;
   } catch(e) {
     log("FAIL: " + e.message, "err");
-    log("Build the WASM module first — see README.", "info");
+    log("Ensure you're serving over HTTPS or localhost.", "info");
   }
 })();
 </script>
