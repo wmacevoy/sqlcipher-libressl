@@ -2,56 +2,97 @@
 
 [![build-test](https://github.com/wmacevoy/sqlcipher-libressl/actions/workflows/build-test.yml/badge.svg)](https://github.com/wmacevoy/sqlcipher-libressl/actions/workflows/build-test.yml)
 
+Encrypted SQLite — in the browser, on the server, everywhere.
+
 Fork of [SQLCipher](https://github.com/sqlcipher/sqlcipher) v4.14.0
-patched for **LibreSSL** compatibility and **Emscripten/WASM** builds.
+patched for **LibreSSL** and **WASM**.  Two patches, three files changed.
 
-Two patches, three files changed, zero new dependencies.
+## Browser: encrypted SQLite with OPFS persistence
 
-## Quick start
+Every COMMIT is durable.  No manual save.  Survives tab close, crash,
+browser restart.  Data encrypted at rest in the Origin Private File System.
 
-```bash
-# Install LibreSSL (if not already available)
-curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
-cd libressl-4.2.1 && mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
-  -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-make -j$(nproc) && make install
-cd ../..
+```html
+<script src="sqlcipher.js"></script>
+<script>
+var worker = new Worker("sqlcipher-worker.js");
+var _id = 0, _pending = {};
 
-# Build SQLCipher with LibreSSL
-./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
-  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-make -j$(nproc)
+function send(msg) {
+  return new Promise(function(resolve, reject) {
+    msg.id = ++_id;
+    _pending[msg.id] = {resolve: resolve, reject: reject};
+    worker.postMessage(msg);
+  });
+}
+worker.onmessage = function(e) {
+  var p = _pending[e.data.id]; delete _pending[e.data.id];
+  if (e.data.ok) p.resolve(e.data); else p.reject(new Error(e.data.error));
+};
 
-# Run the example
-gcc -O2 -o basic examples/basic.c \
-  -I. -I$HOME/libressl/include \
-  -L.libs -L$HOME/libressl/lib \
-  -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
+(async function() {
+  await send({type: "init"});
+  await send({type: "open", filename: "/app.db", key: "secret"});
+  await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS t (x TEXT)"});
+  await send({type: "exec", sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
+
+  var result = await send({type: "select", sql: "SELECT * FROM t"});
+  console.log(result.rows);  // [{x: "hello"}]
+
+  // Export encrypted blob (for backup, server sync, etc.)
+  var backup = await send({type: "export"});
+  // backup.bytes is a Uint8Array — the encrypted SQLite file
+})();
+</script>
 ```
 
-## Web example
+### Release files
 
-`examples/web/index.html` — encrypted SQLite running entirely in the
-browser.  No server, no extensions, no plugins.
+Download from [Releases](https://github.com/wmacevoy/sqlcipher-libressl/releases):
 
-1. Build the WASM module (CI does this automatically — download the
-   artifact, or build locally)
-2. Copy `sqlcipher.js` and `sqlcipher.wasm` into `examples/web/`
-3. Serve the directory: `python3 -m http.server 8000`
-4. Open `http://localhost:8000/examples/web/`
+| File | Description |
+|------|-------------|
+| `sqlcipher.js` | Emscripten glue |
+| `sqlcipher.wasm` | Compiled binary (~1.4MB) |
+| `sqlcipher-oo1.js` | [oo1 API](https://sqlite.org/wasm/doc/trunk/api-oo1.md) shim (main thread, IndexedDB fallback) |
+| `sqlcipher-worker.js` | Web Worker with OPFS VFS (durable persistence) |
 
-The page lets you create an encrypted database, insert rows, query them,
-close and reopen with the same key, and verify that a wrong key is rejected.
+### Run the example
 
-## Native C example
+```bash
+cd examples/web
+# Download release files into this directory:
+gh release download v0.1.0 --repo wmacevoy/sqlcipher-libressl
+python3 -m http.server 8000
+# open http://localhost:8000
+```
 
-`examples/basic.c` — encrypted database round-trip from C:
+### Two persistence modes
+
+| | OPFS VFS (Worker) | IndexedDB (main thread) |
+|-|-------------------|------------------------|
+| **Durability** | Every COMMIT | On `db.save()` call |
+| **Write cost** | 4KB per changed page | Entire database blob |
+| **Tab crash** | Data safe | Data since last save lost |
+| **Requires** | Web Worker | Nothing extra |
+| **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
+
+### Worker message protocol
+
+| Message | Fields | Response |
+|---------|--------|----------|
+| `init` | — | `{ok}` |
+| `open` | `filename`, `key` | `{ok}` |
+| `exec` | `sql`, `bind?` | `{ok, changes}` |
+| `select` | `sql`, `bind?` | `{ok, rows, names}` |
+| `export` | — | `{ok, bytes}` |
+| `close` | — | `{ok}` |
+
+## Native C
 
 ```c
 #include "sqlite3.h"
+int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
 
 sqlite3 *db;
 sqlite3_open("encrypted.db", &db);
@@ -62,51 +103,30 @@ sqlite3_exec(db, "INSERT INTO t VALUES ('temp', 22.5)", 0, 0, 0);
 sqlite3_close(db);
 
 // Reopen with same key — data intact
-sqlite3_open("encrypted.db", &db);
-sqlite3_key(db, "secret", 6);
-// SELECT * FROM t → temp, 22.5
-
 // Without key — SQLITE_NOTADB
 ```
 
-Tests all four cases: create, reopen with correct key, reject without key,
-reject wrong key.  Used as the CI smoke test.
-
-## Patches
-
-### 1. HMAC: EVP_MAC &rarr; legacy HMAC API
-
-**File:** `src/crypto_openssl.c`
-
-Upstream SQLCipher 4.14.0 uses `EVP_MAC` (an API only available in
-OpenSSL 3.0+, not in LibreSSL).  This patch replaces it with the
-legacy `HMAC_CTX_new` / `HMAC_Init_ex` / `HMAC_Update` / `HMAC_Final`
-API, which LibreSSL implements.
-
-The patch also simplifies the error path (single `goto error` instead
-of `goto cleanup`), removing ~40 lines with no behavior change.
-
-### 2. WASM: atexit instead of .fini_array
-
-**File:** `src/sqlcipher.c`
-
-Emscripten doesn't support `.fini_array` ELF sections.  This patch
-adds an `__EMSCRIPTEN__` guard that registers `sqlcipher_fini` via
-`atexit()` instead.  Key zeroing behavior is preserved:
-
-- **Native Linux/macOS:** original `.fini_array` / `__DATA,__mod_term_func`
-- **WASM:** `atexit(sqlcipher_fini)` registered via `__attribute__((constructor))`
+See `examples/basic.c` for the full round-trip test (create, reopen,
+reject wrong key).
 
 ## Build
 
 ### Prerequisites
 
-- C compiler (gcc or clang)
-- cmake
-- LibreSSL (built from source or installed)
-- tcl (for the full test suite)
+- C compiler, cmake, LibreSSL v4.2.1
 
-### Native build
+### Install LibreSSL
+
+```bash
+curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
+cd libressl-4.2.1 && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
+  -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+make -j$(nproc) && make install
+cd ../..
+```
+
+### Build SQLCipher
 
 Note: `-DSQLCIPHER_CRYPTO_OPENSSL` is SQLCipher's name for the
 OpenSSL-compatible crypto provider.  LibreSSL implements this API.
@@ -118,85 +138,59 @@ OpenSSL-compatible crypto provider.  LibreSSL implements this API.
 make -j$(nproc)
 ```
 
-### Amalgamation (for embedding or WASM)
-
-```bash
-make sqlite3.c   # produces sqlite3.c + sqlite3.h
-```
-
 ### Test
 
 ```bash
-# Smoke test (build + run the example)
-gcc -O2 -o basic examples/basic.c \
-  -I. -I$HOME/libressl/include \
-  -L.libs -L$HOME/libressl/lib \
-  -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
+# Smoke test
+gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
+  libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
+./basic
 
-# Full SQLCipher test suite (requires tcl)
+# Full SQLCipher TCL test suite
 make testfixture
 cd test && ../testfixture sqlcipher.test
 ```
 
-## Usage
+## Patches
 
-### As a git submodule
+### 1. HMAC: EVP_MAC &rarr; legacy HMAC API (`src/crypto_openssl.c`)
 
-```bash
-git submodule add git@github.com:wmacevoy/sqlcipher-libressl.git vendor/sqlcipher
+Upstream uses `EVP_MAC` (OpenSSL 3.0+ only, not in LibreSSL).
+Replaced with `HMAC_CTX_new`/`HMAC_Init_ex`/`HMAC_Update`/`HMAC_Final`
+which LibreSSL implements.
+
+### 2. WASM: atexit instead of .fini_array (`src/sqlcipher.c`)
+
+Emscripten doesn't support `.fini_array`.  Added `__EMSCRIPTEN__`
+guard using `atexit()` for key zeroing.
+
+## Project layout
+
+```
+wasm/
+  sqlcipher_wasm.c      C helpers for JS<->WASM boundary
+  opfs_vfs.c            OPFS-backed SQLite VFS (durable persistence)
+  sqlcipher-oo1.js      oo1 API shim (main thread, IndexedDB)
+  sqlcipher-worker.js   Web Worker (OPFS VFS, postMessage protocol)
+
+examples/
+  basic.c               Native C encrypted round-trip
+  web/index.html         Browser demo (Worker + OPFS)
+
+docs/
+  oo1-api.md            Full oo1 API reference + persistence docs
 ```
 
-### As a patch over upstream
+## Documentation
 
-```bash
-git clone git@github.com:sqlcipher/sqlcipher.git
-cd sqlcipher
-git checkout v4.14.0
-git diff 778ab890..0fced25d -- src/crypto_openssl.c src/sqlcipher.c | git apply
-```
-
-## WASM
-
-### Compiling to WASM with Emscripten
-
-```bash
-# Build LibreSSL for WASM first
-mkdir -p libressl-wasm && cd libressl-wasm
-emcmake cmake /path/to/libressl -DCMAKE_INSTALL_PREFIX=$HOME/libressl-wasm \
-  -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
-  -DCMAKE_C_FLAGS="-DHAVE_TIMEGM -DHAVE_GETENTROPY -D__STDC_NO_ATOMICS__"
-emmake make -j$(nproc) crypto
-cd ..
-
-# Build amalgamation, then compile to WASM
-make sqlite3.c
-emcc sqlite3.c your_wasm_wrapper.c \
-  -I$HOME/libressl/include -L$HOME/libressl-wasm/lib \
-  -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL \
-  -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=1 \
-  -s WASM=1 -s MODULARIZE=1 -s FILESYSTEM=1 \
-  -s ALLOW_MEMORY_GROWTH=1 \
-  libressl-wasm/lib/libcrypto.a \
-  -o sqlcipher.js
-```
-
-### Entropy in WASM
-
-LibreSSL uses `getentropy()`.  Emscripten maps this to
-`crypto.getRandomValues()` when compiled with `-DHAVE_GETENTROPY`.
-No `/dev/urandom` needed.
-
-### FILESYSTEM=1
-
-LibreSSL's `libcrypto.a` references BIO socket symbols at link time
-(dead code in this use case).  `FILESYSTEM=1` provides the stubs.
-Overhead: ~50KB.  Future work: strip BIO from the WASM libcrypto build.
+| Doc | Scope |
+|-----|-------|
+| [docs/oo1-api.md](docs/oo1-api.md) | oo1 API reference, persistence (OPFS + IndexedDB), worker protocol |
 
 ## Upstream
 
 - **SQLCipher:** https://github.com/sqlcipher/sqlcipher (v4.14.0, SQLite 3.51.3)
-- **LibreSSL:** https://www.libressl.org
+- **LibreSSL:** v4.2.1 — https://github.com/libressl/portable
 
 ## Why LibreSSL
 

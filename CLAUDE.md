@@ -2,26 +2,72 @@
 
 ## Project
 
-sqlcipher-libressl — Fork of SQLCipher v4.14.0 (SQLite 3.51.3) patched
-for LibreSSL compatibility and Emscripten/WASM builds.  Two patches over
-upstream, three files changed.
+sqlcipher-libressl — Encrypted SQLite everywhere.  Fork of SQLCipher
+v4.14.0 (SQLite 3.51.3) patched for LibreSSL and WASM.  Two patches
+over upstream.  Ships a WASM build with OPFS VFS for durable encrypted
+persistence in the browser.
 
-## Patches
+## Architecture
 
-Only two files are modified from upstream:
+```
+Native:   SQLCipher + LibreSSL libcrypto.a → encrypted SQLite
+Browser:  SQLCipher WASM + OPFS VFS → encrypted, durable, no server
+          Worker handles DB commands via postMessage
+          oo1 API shim available for main-thread use (IndexedDB fallback)
+```
 
-1. **`src/crypto_openssl.c`** — HMAC function: replaced OpenSSL 3 `EVP_MAC`
-   API with legacy `HMAC_CTX_new`/`HMAC_Init_ex`/`HMAC_Update`/`HMAC_Final`.
-   Works with LibreSSL and all OpenSSL versions.
+## Key files
 
-2. **`src/sqlcipher.c`** — WASM cleanup: `__EMSCRIPTEN__` guard replaces
-   `.fini_array` with `atexit()` for key zeroing in WASM builds.
+| File | Role |
+|------|------|
+| `src/crypto_openssl.c` | Patched: HMAC legacy API for LibreSSL |
+| `src/sqlcipher.c` | Patched: atexit for WASM |
+| `wasm/sqlcipher_wasm.c` | C helpers for JS↔WASM boundary |
+| `wasm/opfs_vfs.c` | OPFS-backed SQLite VFS (EM_JS callbacks) |
+| `wasm/sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB) |
+| `wasm/sqlcipher-worker.js` | Web Worker (OPFS VFS, postMessage protocol) |
+| `examples/basic.c` | Native C smoke test |
+| `examples/web/index.html` | Browser demo (Worker + OPFS) |
+| `docs/oo1-api.md` | Full API reference + persistence docs |
 
-Everything else is upstream SQLCipher.  Do not modify other files.
+## Commands
+
+```bash
+# Build (requires LibreSSL at $HOME/libressl)
+./configure --with-tempstore=yes \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
+  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
+make -j$(nproc)
+
+# Amalgamation
+make sqlite3.c
+
+# Native smoke test
+gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
+  libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
+./basic
+
+# Full TCL test suite
+make testfixture
+cd test && ../testfixture sqlcipher.test
+
+# Web example (download release artifacts first)
+cd examples/web
+gh release download v0.1.0 --repo wmacevoy/sqlcipher-libressl
+python3 -m http.server 8000
+```
+
+## CI
+
+`.github/workflows/build-test.yml`:
+- **native job**: build with LibreSSL v4.2.1, smoke test, TCL test suite
+- **wasm job**: build amalgamation, LibreSSL for WASM, compile with OPFS VFS
+- **release job** (on `v*` tags): creates GitHub release with
+  `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-oo1.js`, `sqlcipher-worker.js`
 
 ## Remotes
 
-- `origin` — git@github.com:wmacevoy/sqlcipher-libressl.git (this fork)
+- `origin` — git@github.com:wmacevoy/sqlcipher-libressl.git
 - `upstream` — git@github.com:sqlcipher/sqlcipher.git
 
 ## Syncing with upstream
@@ -29,54 +75,17 @@ Everything else is upstream SQLCipher.  Do not modify other files.
 ```bash
 git fetch upstream
 git merge upstream/master
-# Re-check that the two patches still apply cleanly to crypto_openssl.c and sqlcipher.c
 ```
 
-The patches are in the function `sqlcipher_openssl_hmac` (crypto_openssl.c)
-and the `sqlcipher_fini` registration block (sqlcipher.c ~line 406).
-If upstream changes these areas, the patches may need manual rebasing.
-
-## Commands
-
-```bash
-# Build (requires LibreSSL installed at $HOME/libressl)
-./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
-  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-make -j$(nproc)
-
-# Build amalgamation
-make sqlite3.c
-
-# Smoke test
-gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
-  -L.libs -L$HOME/libressl/lib -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
-
-# Full test suite (requires tcl)
-make testfixture
-cd test && ../testfixture sqlcipher.test
-```
-
-## CI
-
-`.github/workflows/build-test.yml` runs on every push to master:
-1. Downloads and builds LibreSSL 4.0.0
-2. Configures and builds SQLCipher
-3. Builds the amalgamation
-4. Runs the smoke test (`examples/basic.c`)
-5. Runs the SQLCipher TCL test suite
-
-For WASM builds, see the README.
+Patches are in `sqlcipher_openssl_hmac` (crypto_openssl.c) and
+`sqlcipher_fini` registration (sqlcipher.c ~line 406).
 
 ## Constraints
 
-- **LibreSSL, not OpenSSL.** All crypto must work with LibreSSL.
-  Do not use OpenSSL 3-only APIs (EVP_MAC, OSSL_PARAM, providers).
+- **LibreSSL, not OpenSSL.** Do not use OpenSSL 3-only APIs.
+  Link `libcrypto.a` by full path, never `-lssl` or `-lcrypto`.
 - **WASM-safe.** No `.fini_array`, no `fork()`, no signals.
-  Use `atexit()` behind `__EMSCRIPTEN__` guards.
-- **Minimal diff.** Keep the patch footprint small.  Two files changed
-  is the target.  Do not refactor unrelated code.
+- **Minimal diff.** Two patched files over upstream.  Do not modify other src/ files.
 
 ## License
 
