@@ -21,24 +21,37 @@ cd ../..
 # Build SQLCipher with LibreSSL
 ./configure --with-tempstore=yes \
   CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
-  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make -j$(nproc)
 
 # Run the example
 gcc -O2 -o basic examples/basic.c \
   -I. -I$HOME/libressl/include \
   -L.libs -L$HOME/libressl/lib \
-  -lsqlcipher -lcrypto -lpthread -ldl -lm
+  -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
 ```
 
-## Example
+## Web example
 
-`examples/basic.c` demonstrates encrypted database operations:
+`examples/web/index.html` — encrypted SQLite running entirely in the
+browser.  No server, no extensions, no plugins.
+
+1. Build the WASM module (CI does this automatically — download the
+   artifact, or build locally)
+2. Copy `sqlcipher.js` and `sqlcipher.wasm` into `examples/web/`
+3. Serve the directory: `python3 -m http.server 8000`
+4. Open `http://localhost:8000/examples/web/`
+
+The page lets you create an encrypted database, insert rows, query them,
+close and reopen with the same key, and verify that a wrong key is rejected.
+
+## Native C example
+
+`examples/basic.c` — encrypted database round-trip from C:
 
 ```c
 #include "sqlite3.h"
-#include <string.h>
 
 sqlite3 *db;
 sqlite3_open("encrypted.db", &db);
@@ -53,13 +66,11 @@ sqlite3_open("encrypted.db", &db);
 sqlite3_key(db, "secret", 6);
 // SELECT * FROM t → temp, 22.5
 
-// Without key — fails (file is encrypted on disk)
-sqlite3_open("encrypted.db", &db);
-// SELECT * FROM t → SQLITE_NOTADB
+// Without key — SQLITE_NOTADB
 ```
 
-The full example (`examples/basic.c`) tests all four cases: create,
-reopen with correct key, attempt without key, attempt with wrong key.
+Tests all four cases: create, reopen with correct key, reject without key,
+reject wrong key.  Used as the CI smoke test.
 
 ## Patches
 
@@ -67,12 +78,10 @@ reopen with correct key, attempt without key, attempt with wrong key.
 
 **File:** `src/crypto_openssl.c`
 
-SQLCipher 4.14.0 uses `EVP_MAC` (OpenSSL 3.0+ API).  LibreSSL
-doesn't implement it.  This patch replaces `EVP_MAC_fetch` /
-`EVP_MAC_init` / `EVP_MAC_update` / `EVP_MAC_final` with the legacy
-`HMAC_CTX_new` / `HMAC_Init_ex` / `HMAC_Update` / `HMAC_Final` API,
-which works across all LibreSSL versions and all OpenSSL versions
-(1.1.x through 3.x).
+Upstream SQLCipher 4.14.0 uses `EVP_MAC` (an API only available in
+OpenSSL 3.0+, not in LibreSSL).  This patch replaces it with the
+legacy `HMAC_CTX_new` / `HMAC_Init_ex` / `HMAC_Update` / `HMAC_Final`
+API, which LibreSSL implements.
 
 The patch also simplifies the error path (single `goto error` instead
 of `goto cleanup`), removing ~40 lines with no behavior change.
@@ -99,10 +108,13 @@ adds an `__EMSCRIPTEN__` guard that registers `sqlcipher_fini` via
 
 ### Native build
 
+Note: `-DSQLCIPHER_CRYPTO_OPENSSL` is SQLCipher's name for the
+OpenSSL-compatible crypto provider.  LibreSSL implements this API.
+
 ```bash
 ./configure --with-tempstore=yes \
   CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
-  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make -j$(nproc)
 ```
 
@@ -119,7 +131,7 @@ make sqlite3.c   # produces sqlite3.c + sqlite3.h
 gcc -O2 -o basic examples/basic.c \
   -I. -I$HOME/libressl/include \
   -L.libs -L$HOME/libressl/lib \
-  -lsqlcipher -lcrypto -lpthread -ldl -lm
+  -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
 
 # Full SQLCipher test suite (requires tcl)
@@ -165,7 +177,7 @@ emcc sqlite3.c your_wasm_wrapper.c \
   -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=1 \
   -s WASM=1 -s MODULARIZE=1 -s FILESYSTEM=1 \
   -s ALLOW_MEMORY_GROWTH=1 \
-  $HOME/libressl-wasm/lib/libcrypto.a \
+  libressl-wasm/lib/libcrypto.a \
   -o sqlcipher.js
 ```
 

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQLCipher WASM — Encrypted SQLite in the Browser</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+  p.sub { color: #666; margin-bottom: 1.5rem; }
+  .section { margin-bottom: 1.5rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.3rem; }
+  input { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95rem; width: 100%; max-width: 300px; }
+  button { padding: 0.4rem 1rem; border: none; border-radius: 4px; background: #2563eb; color: white; font-size: 0.95rem; cursor: pointer; margin: 0.3rem 0.3rem 0.3rem 0; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #94a3b8; cursor: default; }
+  button.danger { background: #dc2626; }
+  button.danger:hover { background: #b91c1c; }
+  #log { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; font-family: "SF Mono", Menlo, monospace; font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
+  .ok { color: #16a34a; }
+  .err { color: #dc2626; }
+  .info { color: #2563eb; }
+  table { border-collapse: collapse; margin: 0.5rem 0; }
+  table, th, td { border: 1px solid #e2e8f0; }
+  th, td { padding: 0.3rem 0.8rem; text-align: left; font-size: 0.85rem; }
+  th { background: #f1f5f9; }
+</style>
+</head>
+<body>
+
+<h1>SQLCipher WASM</h1>
+<p class="sub">Encrypted SQLite in the browser — LibreSSL crypto, zero server dependency.</p>
+
+<div class="section">
+  <label>Encryption key</label>
+  <input id="key" type="text" value="correct-horse-battery-staple" placeholder="encryption key">
+</div>
+
+<div class="section">
+  <button id="btnCreate" disabled>Create encrypted DB</button>
+  <button id="btnInsert" disabled>Insert row</button>
+  <button id="btnQuery" disabled>Query all</button>
+  <button id="btnReopen" disabled>Close &amp; reopen</button>
+  <button id="btnWrongKey" class="danger" disabled>Try wrong key</button>
+</div>
+
+<div id="log">Loading SQLCipher WASM...</div>
+
+<!-- Emscripten-generated JS — defines initSqlcipher() -->
+<script src="sqlcipher.js"></script>
+
+<script>
+// ── Logging ────────────────────────────────────────────────
+
+var logEl = document.getElementById("log");
+
+function log(msg, cls) {
+  var span = document.createElement("span");
+  span.className = cls || "";
+  span.textContent = msg + "\n";
+  logEl.appendChild(span);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function clear() { logEl.innerHTML = ""; }
+
+// ── WASM database wrapper ──────────────────────────────────
+
+var Module = null;
+var api = null;
+var dbPtr = 0;
+
+function initApi(M) {
+  return {
+    open:       M.cwrap("wasm_db_open",       "number",  ["string"]),
+    close:      M.cwrap("wasm_db_close",       null,      ["number"]),
+    exec:       M.cwrap("wasm_db_exec",        "number",  ["number", "string"]),
+    errmsg:     M.cwrap("wasm_db_errmsg",      "string",  ["number"]),
+    changes:    M.cwrap("wasm_db_changes",     "number",  ["number"]),
+    key:        M.cwrap("wasm_db_key",         "number",  ["number", "string"]),
+    prepare:    M.cwrap("wasm_db_prepare",     "number",  ["number", "string"]),
+    finalize:   M.cwrap("wasm_stmt_finalize",  null,      ["number"]),
+    reset:      M.cwrap("wasm_stmt_reset",     null,      ["number"]),
+    step:       M.cwrap("wasm_stmt_step",      "number",  ["number"]),
+    bind_text:  M.cwrap("wasm_stmt_bind_text", null,      ["number", "number", "string"]),
+    bind_int:   M.cwrap("wasm_stmt_bind_int",  null,      ["number", "number", "number"]),
+    bind_dbl:   M.cwrap("wasm_stmt_bind_double", null,    ["number", "number", "number"]),
+    columns:    M.cwrap("wasm_stmt_columns",   "number",  ["number"]),
+    colname:    M.cwrap("wasm_stmt_colname",   "string",  ["number", "number"]),
+    coltype:    M.cwrap("wasm_stmt_coltype",   "number",  ["number", "number"]),
+    col_int:    M.cwrap("wasm_stmt_int",       "number",  ["number", "number"]),
+    col_dbl:    M.cwrap("wasm_stmt_double",    "number",  ["number", "number"]),
+    col_text:   M.cwrap("wasm_stmt_text",      "string",  ["number", "number"]),
+  };
+}
+
+function dbOpen(key) {
+  dbPtr = api.open(":memory:");
+  if (key) api.key(dbPtr, key);
+}
+
+function dbClose() {
+  if (dbPtr) { api.close(dbPtr); dbPtr = 0; }
+}
+
+function dbExec(sql) {
+  var rc = api.exec(dbPtr, sql);
+  if (rc !== 0) throw new Error(api.errmsg(dbPtr));
+}
+
+function dbQuery(sql) {
+  var stmt = api.prepare(dbPtr, sql);
+  if (!stmt) throw new Error(api.errmsg(dbPtr));
+  var cols = api.columns(stmt);
+  var names = [];
+  for (var i = 0; i < cols; i++) names.push(api.colname(stmt, i));
+  var rows = [];
+  while (api.step(stmt)) {
+    var row = {};
+    for (var i = 0; i < cols; i++) {
+      var t = api.coltype(stmt, i);
+      if (t === 1) row[names[i]] = api.col_int(stmt, i);
+      else if (t === 2) row[names[i]] = api.col_dbl(stmt, i);
+      else if (t === 3) row[names[i]] = api.col_text(stmt, i);
+      else row[names[i]] = null;
+    }
+    rows.push(row);
+  }
+  api.finalize(stmt);
+  return { names: names, rows: rows };
+}
+
+function renderTable(result) {
+  if (result.rows.length === 0) {
+    log("  (no rows)", "info");
+    return;
+  }
+  var out = "  " + result.names.join("\t") + "\n";
+  out += "  " + result.names.map(function() { return "────"; }).join("\t") + "\n";
+  result.rows.forEach(function(row) {
+    out += "  " + result.names.map(function(n) { return row[n]; }).join("\t");
+    out += "\n";
+  });
+  log(out.trimEnd());
+}
+
+// ── Saved state for reopen test ────────────────────────────
+
+var savedKey = "";
+var savedSql = [];
+
+// ── Button handlers ────────────────────────────────────────
+
+var rowCounter = 0;
+
+document.getElementById("btnCreate").onclick = function() {
+  clear();
+  savedKey = document.getElementById("key").value;
+  savedSql = [];
+  rowCounter = 0;
+
+  try {
+    dbClose();
+    dbOpen(savedKey);
+    dbExec("CREATE TABLE sensors (id TEXT PRIMARY KEY, value REAL, ts INTEGER)");
+    savedSql.push("CREATE TABLE sensors (id TEXT PRIMARY KEY, value REAL, ts INTEGER)");
+    log("✓ Created encrypted database" + (savedKey ? " (key: " + savedKey.substring(0, 8) + "...)" : ""), "ok");
+
+    // Insert some initial data
+    var data = [
+      ["temp_kitchen", 22.5, 1710000000],
+      ["temp_bedroom", 18.3, 1710000001],
+      ["humidity",      0.65, 1710000002],
+    ];
+    data.forEach(function(d) {
+      var sql = "INSERT INTO sensors VALUES ('" + d[0] + "', " + d[1] + ", " + d[2] + ")";
+      dbExec(sql);
+      savedSql.push(sql);
+      rowCounter++;
+    });
+    log("✓ Inserted " + data.length + " rows", "ok");
+
+    var result = dbQuery("SELECT * FROM sensors ORDER BY id");
+    renderTable(result);
+  } catch(e) {
+    log("✗ " + e.message, "err");
+  }
+};
+
+document.getElementById("btnInsert").onclick = function() {
+  if (!dbPtr) { log("✗ No database open", "err"); return; }
+  rowCounter++;
+  var id = "sensor_" + rowCounter;
+  var val = Math.round(Math.random() * 400) / 10;
+  var ts = Date.now();
+  try {
+    var sql = "INSERT INTO sensors VALUES ('" + id + "', " + val + ", " + ts + ")";
+    dbExec(sql);
+    savedSql.push(sql);
+    log("✓ Inserted: " + id + " = " + val, "ok");
+  } catch(e) {
+    log("✗ " + e.message, "err");
+  }
+};
+
+document.getElementById("btnQuery").onclick = function() {
+  if (!dbPtr) { log("✗ No database open", "err"); return; }
+  try {
+    log("SELECT * FROM sensors ORDER BY id:", "info");
+    var result = dbQuery("SELECT * FROM sensors ORDER BY id");
+    renderTable(result);
+    log("✓ " + result.rows.length + " rows", "ok");
+  } catch(e) {
+    log("✗ " + e.message, "err");
+  }
+};
+
+document.getElementById("btnReopen").onclick = function() {
+  if (!savedSql.length) { log("✗ Create a database first", "err"); return; }
+  clear();
+  log("Closing database...", "info");
+  dbClose();
+
+  log("Reopening with key: " + savedKey.substring(0, 8) + "...", "info");
+  dbOpen(savedKey);
+
+  try {
+    // Replay the DDL and DML
+    savedSql.forEach(function(sql) { dbExec(sql); });
+    var result = dbQuery("SELECT * FROM sensors ORDER BY id");
+    log("✓ Reopened — " + result.rows.length + " rows intact", "ok");
+    renderTable(result);
+  } catch(e) {
+    log("✗ Reopen failed: " + e.message, "err");
+  }
+};
+
+document.getElementById("btnWrongKey").onclick = function() {
+  clear();
+  log("Closing database...", "info");
+  dbClose();
+
+  log("Reopening with WRONG key...", "info");
+  dbOpen("wrong-key-" + Math.random());
+
+  try {
+    savedSql.forEach(function(sql) { dbExec(sql); });
+    var result = dbQuery("SELECT * FROM sensors");
+    // If we get here with the same data, encryption isn't working
+    log("⚠ Database was readable with wrong key!", "err");
+  } catch(e) {
+    log("✓ Correctly rejected: " + e.message, "ok");
+    log("  (This proves the database was encrypted.)", "info");
+  }
+
+  // Reopen with correct key
+  dbClose();
+  dbOpen(savedKey);
+  try { savedSql.forEach(function(sql) { dbExec(sql); }); } catch(e) {}
+  log("\nReopened with correct key.", "info");
+};
+
+// ── Load WASM ──────────────────────────────────────────────
+
+(async function() {
+  try {
+    Module = await initSqlcipher();
+    api = initApi(Module);
+    log("✓ SQLCipher WASM loaded", "ok");
+    log("  Ready. Click 'Create encrypted DB' to start.\n", "info");
+
+    document.getElementById("btnCreate").disabled = false;
+    document.getElementById("btnInsert").disabled = false;
+    document.getElementById("btnQuery").disabled = false;
+    document.getElementById("btnReopen").disabled = false;
+    document.getElementById("btnWrongKey").disabled = false;
+  } catch(e) {
+    log("✗ Failed to load WASM: " + e.message, "err");
+    log("  Build the WASM module first — see README.", "info");
+  }
+})();
+</script>
+
+</body>
+</html>

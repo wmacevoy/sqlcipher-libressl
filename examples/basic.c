@@ -5,13 +5,13 @@
  *   gcc -O2 -o basic examples/basic.c \
  *     -I. -I$HOME/libressl/include \
  *     -L.libs -L$HOME/libressl/lib \
- *     -lsqlcipher -lcrypto -lpthread -ldl -lm
+ *     -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
  *
  * Or with the amalgamation:
  *   gcc -O2 -o basic examples/basic.c sqlite3.c \
  *     -I$HOME/libressl/include -L$HOME/libressl/lib \
  *     -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL \
- *     -lcrypto -lpthread -ldl -lm
+ *     $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
  *
  * Run:
  *   ./basic

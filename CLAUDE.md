@@ -42,7 +42,7 @@ If upstream changes these areas, the patches may need manual rebasing.
 # Build (requires LibreSSL installed at $HOME/libressl)
 ./configure --with-tempstore=yes \
   CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
-  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make -j$(nproc)
 
 # Build amalgamation
@@ -50,7 +50,7 @@ make sqlite3.c
 
 # Smoke test
 gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
-  -L.libs -L$HOME/libressl/lib -lsqlcipher -lcrypto -lpthread -ldl -lm
+  -L.libs -L$HOME/libressl/lib -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
 
 # Full test suite (requires tcl)

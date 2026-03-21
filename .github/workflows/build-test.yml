@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +16,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y tcl cmake automake autoconf libtool
+          sudo apt-get install -y tcl cmake
 
       - name: Download and build LibreSSL
         run: |
@@ -27,14 +27,12 @@ jobs:
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
           make -j$(nproc)
           make install
-          echo "=== LibreSSL ==="
-          ls $HOME/libressl/lib/libssl.a $HOME/libressl/lib/libcrypto.a
 
       - name: Configure SQLCipher with LibreSSL
         run: |
           ./configure --with-tempstore=yes \
             CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
-            LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 
       - name: Build
         run: make -j$(nproc)
@@ -42,7 +40,6 @@ jobs:
       - name: Build amalgamation
         run: |
           make sqlite3.c
-          echo "=== Amalgamation ==="
           ls -lh sqlite3.c sqlite3.h
 
       - name: Smoke test — encrypted round-trip
@@ -50,14 +47,102 @@ jobs:
           gcc -O2 -o example_basic examples/basic.c \
             -I. -I$HOME/libressl/include \
             -L.libs -L$HOME/libressl/lib \
-            -lsqlcipher -lcrypto -lpthread -ldl -lm
-          export LD_LIBRARY_PATH=.libs:$HOME/libressl/lib
-          ./example_basic
-          echo "=== Smoke test passed ==="
+            -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
+          LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./example_basic
 
       - name: Run SQLCipher test suite
         run: |
           make testfixture
-          cd test
-          ../testfixture sqlcipher.test 2>&1 | tail -30
-          echo "=== SQLCipher tests complete ==="
+          cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcl cmake
+
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+
+      - name: Download and build LibreSSL (native, for configure)
+        run: |
+          curl -sL https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.0.0.tar.gz | tar xz
+          cd libressl-4.0.0
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
+            -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+          make -j$(nproc)
+          make install
+
+      - name: Build SQLCipher amalgamation
+        run: |
+          ./configure --with-tempstore=yes \
+            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
+          make sqlite3.c
+
+      - name: Build LibreSSL for WASM
+        run: |
+          cd libressl-4.0.0
+          mkdir -p build-wasm && cd build-wasm
+          emcmake cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl-wasm \
+            -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_C_FLAGS="-DHAVE_TIMEGM -DHAVE_GETENTROPY -D__STDC_NO_ATOMICS__"
+          emmake make -j$(nproc) crypto
+          mkdir -p $HOME/libressl-wasm/lib
+          cp crypto/libcrypto.a $HOME/libressl-wasm/lib/
+
+      - name: Compile SQLCipher to WASM
+        run: |
+          mkdir -p wasm/dist
+          cp sqlite3.c wasm/dist/
+          cp sqlite3.h wasm/dist/
+          cp wasm/sqlcipher_wasm.c wasm/dist/
+
+          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_malloc","_free"]'
+          RUNTIME='["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
+
+          cd wasm/dist
+          emcc sqlcipher_wasm.c \
+            -I. -I$HOME/libressl/include \
+            -L$HOME/libressl-wasm/lib \
+            -O2 \
+            -DSQLITE_HAS_CODEC \
+            -DSQLCIPHER_CRYPTO_OPENSSL \
+            -DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
+            -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown \
+            -DSQLITE_OMIT_LOAD_EXTENSION \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_TEMP_STORE=2 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_JSON1 \
+            -s WASM=1 \
+            -s EXPORTED_FUNCTIONS="$EXPORTED" \
+            -s EXPORTED_RUNTIME_METHODS="$RUNTIME" \
+            -s ALLOW_MEMORY_GROWTH=1 \
+            -s INITIAL_MEMORY=16777216 \
+            -s MODULARIZE=1 \
+            -s EXPORT_NAME="initSqlcipher" \
+            -s ENVIRONMENT='web,worker,node' \
+            -s FILESYSTEM=1 \
+            $HOME/libressl-wasm/lib/libcrypto.a \
+            -o sqlcipher.js
+
+          rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c
+          ls -lh sqlcipher.js sqlcipher.wasm
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlcipher-wasm
+          path: |
+            wasm/dist/sqlcipher.js
+            wasm/dist/sqlcipher.wasm
+            examples/web/index.html
+          retention-days: 90
