@@ -11,9 +11,10 @@ persistence in the browser.
 
 ```
 Native:   SQLCipher + LibreSSL libcrypto.a → encrypted SQLite
-Browser:  SQLCipher WASM + OPFS VFS → encrypted, durable, no server
-          Worker handles DB commands via postMessage
-          oo1 API shim available for main-thread use (IndexedDB fallback)
+Browser:  SQLCipher WASM + VFS → encrypted, durable, no server
+          Worker auto-detects: OPFS (durable/commit) or IndexedDB page cache (durable/save)
+          Unified API: sqlcipher-api.js — same interface, best backend
+          oo1 API shim still available for main-thread use
 ```
 
 ## Key files
@@ -24,10 +25,12 @@ Browser:  SQLCipher WASM + OPFS VFS → encrypted, durable, no server
 | `src/sqlcipher.c` | Patched: atexit for WASM |
 | `wasm/sqlcipher_wasm.c` | C helpers for JS↔WASM boundary |
 | `wasm/opfs_vfs.c` | OPFS-backed SQLite VFS (EM_JS callbacks) |
-| `wasm/sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB) |
-| `wasm/sqlcipher-worker.js` | Web Worker (OPFS VFS, postMessage protocol) |
+| `wasm/sqlcipher-api.js` | Unified API — auto-detects OPFS / IndexedDB |
+| `wasm/sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB blob) |
+| `wasm/sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
 | `examples/basic.c` | Native C smoke test |
 | `examples/web/index.html` | Browser demo (Worker + OPFS) |
+| `examples/web/unified.html` | Browser demo (unified API) |
 | `docs/oo1-api.md` | Full API reference + persistence docs |
 
 ## Commands
@@ -63,7 +66,7 @@ python3 -m http.server 8000
 - **native job**: build with LibreSSL v4.2.1, smoke test, TCL test suite
 - **wasm job**: build amalgamation, LibreSSL for WASM, compile with OPFS VFS
 - **release job** (on `v*` tags): creates GitHub release with
-  `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-oo1.js`, `sqlcipher-worker.js`
+  `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-api.js`, `sqlcipher-oo1.js`, `sqlcipher-worker.js`
 
 ## Remotes
 

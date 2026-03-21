@@ -138,6 +138,15 @@ jobs:
           rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c opfs_vfs.c
           ls -lh sqlcipher.js sqlcipher.wasm
 
+      - name: Package static libs for custom WASM builds
+        run: |
+          mkdir -p wasm/dist/static
+          cp sqlite3.c sqlite3.h wasm/dist/static/
+          cp wasm/sqlcipher_wasm.c wasm/opfs_vfs.c wasm/dist/static/
+          cp $HOME/libressl-wasm/lib/libcrypto.a wasm/dist/static/libcrypto-wasm.a
+          cp -r $HOME/libressl/include/openssl wasm/dist/static/openssl
+          ls -lh wasm/dist/static/
+
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -145,6 +154,8 @@ jobs:
           path: |
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
+            wasm/dist/static/
+            wasm/sqlcipher-api.js
             wasm/sqlcipher-oo1.js
             wasm/sqlcipher-worker.js
           retention-days: 90
@@ -168,6 +179,13 @@ jobs:
         run: |
           mkdir -p dist
           find release -type f -name '*.js' -o -name '*.wasm' | while read f; do cp "$f" dist/; done
+          # Package static libs as a tarball for custom WASM builds
+          if [ -d release/wasm/dist/static ] || [ -d release/static ]; then
+            STATIC_DIR=$(find release -type d -name static | head -1)
+            if [ -n "$STATIC_DIR" ]; then
+              tar czf dist/sqlcipher-wasm-static.tar.gz -C "$STATIC_DIR" .
+            fi
+          fi
           ls -lh dist/
 
       - name: Create release
@@ -177,8 +195,10 @@ jobs:
           gh release create ${{ github.ref_name }} \
             dist/sqlcipher.js \
             dist/sqlcipher.wasm \
+            dist/sqlcipher-api.js \
             dist/sqlcipher-oo1.js \
             dist/sqlcipher-worker.js \
+            dist/sqlcipher-wasm-static.tar.gz \
             --title "SQLCipher WASM ${{ github.ref_name }}" \
             --notes "$(cat <<'NOTES'
           Encrypted SQLite in the browser — SQLCipher + LibreSSL, compiled to WASM.
@@ -189,25 +209,33 @@ jobs:
           |------|-------------|
           | `sqlcipher.js` | Emscripten glue (~94KB) |
           | `sqlcipher.wasm` | Compiled binary (~1.4MB) |
+          | `sqlcipher-api.js` | Unified API — auto-detects OPFS / IndexedDB |
           | `sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB fallback) |
-          | `sqlcipher-worker.js` | Web Worker with OPFS VFS (durable persistence) |
+          | `sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
+          | `sqlcipher-wasm-static.tar.gz` | Static libs for custom WASM builds |
 
-          ## Quick start
+          ### Static libs (`sqlcipher-wasm-static.tar.gz`)
+
+          For custom WASM builds — contains:
+          - `sqlite3.c`, `sqlite3.h` — SQLCipher amalgamation (patched)
+          - `sqlcipher_wasm.c`, `opfs_vfs.c` — WASM/VFS helpers
+          - `libcrypto-wasm.a` — LibreSSL libcrypto compiled for WASM (Emscripten)
+          - `openssl/` — LibreSSL headers
+
+          ## Quick start (unified API)
 
           ```html
           <script src="sqlcipher.js"></script>
-          <script src="sqlcipher-oo1.js"></script>
+          <script src="sqlcipher-api.js"></script>
           <script>
           (async function() {
-            var Module = await initSqlcipher();
-            var db = await DB.load(Module, {
-              filename: "/app.db",
-              key: "secret",
-              store: "myapp"
-            });
-            db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
-            db.exec({sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
-            await db.save();
+            var db = await SQLCipher.open({filename: "app.db", key: "secret"});
+            console.log("Backend:", db.mode); // "opfs" or "indexeddb"
+            await db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
+            await db.exec("INSERT INTO t VALUES (?)", ["hello"]);
+            var rows = await db.select("SELECT * FROM t");
+            await db.save();  // indexeddb: flush pages. opfs: no-op.
+            await db.close();
           })();
           </script>
           ```

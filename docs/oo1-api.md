@@ -522,20 +522,115 @@ Returns `true` if the statement makes no direct changes to the database.
 
 ## Persistence
 
-Two modes.  OPFS is preferred — every COMMIT is durable automatically.
+### Unified API (recommended)
 
-### OPFS VFS (recommended)
-
-The database file lives directly in the Origin Private File System.
-Every `COMMIT` writes encrypted pages to OPFS via
-`FileSystemSyncAccessHandle`.  No manual save.  Survives tab close,
-crash, browser restart.
-
-Requires a **Web Worker** (the sync access handle API is Worker-only).
-The main thread sends commands via `postMessage`.
+`sqlcipher-api.js` provides a single async interface that auto-detects
+the best persistence backend.  Prefer OPFS (durable per COMMIT), fall
+back to IndexedDB page cache (durable on `save()` and `close()`).
 
 ```html
 <script src="sqlcipher.js"></script>
+<script src="sqlcipher-api.js"></script>
+<script>
+(async function() {
+  var db = await SQLCipher.open({filename: "app.db", key: "secret"});
+  console.log("Backend:", db.mode);  // "opfs" or "indexeddb"
+
+  await db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
+  await db.exec("INSERT INTO t VALUES (?)", ["hello"]);
+
+  var rows = await db.select("SELECT * FROM t");
+  console.log(rows);  // [{x: "hello"}]
+
+  await db.save();    // indexeddb: flush dirty pages. opfs: no-op.
+  await db.close();   // indexeddb: auto-saves then closes.
+})();
+</script>
+```
+
+#### SQLCipher.open(opts) → Promise\<Handle\>
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `filename` | `"/app.db"` | Database name. Leading `/` added if missing. |
+| `key` | — | Encryption passphrase. |
+| `workerUrl` | `"sqlcipher-worker.js"` | Path to the Worker script. |
+
+Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
+
+#### Handle methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array. |
+| `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). |
+| `save()` | `Promise<void>` | **IndexedDB:** checkpoint WAL, flush dirty 4KB pages. **OPFS:** no-op. |
+| `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
+| `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
+| `close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Handle is unusable after. |
+
+#### Handle properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `mode` | `"opfs"` \| `"indexeddb"` | Which persistence backend is active. |
+| `filename` | string | The database filename. |
+
+---
+
+### How persistence works
+
+Both backends use the same SQLite VFS (`opfs_vfs.c`).  The VFS calls
+dispatch to different JS backing stores per handle:
+
+```
+VFS xRead/xWrite
+  ├── OPFS:      SyncAccessHandle   (sync I/O, durable per commit)
+  └── IndexedDB: in-memory buffer   (sync I/O, persisted on save/close)
+```
+
+**OPFS** — `FileSystemSyncAccessHandle` provides synchronous read/write
+in a Web Worker.  Every `xSync` (triggered by `COMMIT`) flushes to
+disk.  Zero data loss on tab crash.
+
+**IndexedDB page cache** — The entire file is loaded into memory on
+open.  VFS reads/writes operate on the buffer.  Dirty 4KB blocks are
+tracked; `save()` checkpoints WAL and writes only changed blocks to
+IndexedDB.  On `close()`, dirty pages are auto-flushed.
+
+IndexedDB schema (`sqlcipher_pages` database, `blocks` object store):
+
+| Key | Value |
+|-----|-------|
+| `[filename, -1]` | `{fileSize}` (meta) |
+| `[filename, 0]` | `Uint8Array(4096)` (block 0) |
+| `[filename, 1]` | `Uint8Array(4096)` (block 1) |
+| ... | ... |
+
+A 10 MB database with 1 changed page writes 4 KB on save, not 10 MB.
+
+---
+
+### Worker message protocol
+
+| Message | Fields | Response |
+|---------|--------|----------|
+| `init` | — | `{ok, mode}` |
+| `open` | `filename`, `key` | `{ok}` |
+| `exec` | `sql`, `bind?` | `{ok, changes}` |
+| `select` | `sql`, `bind?` | `{ok, rows, names}` |
+| `save` | — | `{ok}` |
+| `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
+| `import` | `bytes` | `{ok}` |
+| `close` | — | `{ok}` |
+
+---
+
+### OPFS VFS (direct Worker usage)
+
+For direct Worker control without the unified API:
+
+```html
 <script>
 var worker = new Worker("sqlcipher-worker.js");
 var _id = 0, _pending = {};
@@ -556,57 +651,67 @@ worker.onmessage = function(e) {
 };
 
 (async function() {
-  await send({type: "init"});
+  var r = await send({type: "init"});
+  console.log("mode:", r.mode);
   await send({type: "open", filename: "/app.db", key: "secret"});
   await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS t (x TEXT)"});
   await send({type: "exec", sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
   var result = await send({type: "select", sql: "SELECT * FROM t"});
   console.log(result.rows);
-  // Reload the page — data is already persisted. No save() needed.
 })();
 </script>
 ```
 
-### Worker message protocol
+### oo1 API (main thread, IndexedDB blob)
 
-| Message | Fields | Response |
-|---------|--------|----------|
-| `init` | — | `{ok}` |
-| `open` | `filename`, `key` | `{ok}` |
-| `exec` | `sql`, `bind?` | `{ok, changes}` |
-| `select` | `sql`, `bind?` | `{ok, rows, names}` |
-| `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
-| `close` | — | `{ok}` |
-
-### IndexedDB fallback (main thread)
-
-For environments without OPFS or when a Worker isn't practical,
-use the main-thread oo1 shim with explicit `db.save()`:
+For synchronous main-thread access (no Worker), use the oo1 shim with
+explicit `db.save()`.  Stores the entire database blob in IndexedDB.
 
 ```javascript
+var Module = await initSqlcipher();
 var db = await DB.load(Module, {
   filename: "/app.db",
   key: "secret",
   store: "myapp"
 });
 db.exec({sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
-await db.save();   // exports encrypted bytes → IndexedDB
+await db.save();   // exports entire encrypted blob → IndexedDB
 ```
 
 ### Comparison
 
-| | OPFS VFS | IndexedDB |
-|-|----------|-----------|
-| Durability | Every COMMIT | On `save()` call |
-| Write cost | 4KB per changed page | Entire database blob |
-| Tab crash | Data safe | Data since last `save()` lost |
-| Thread | Worker required | Main thread OK |
-| Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
+| | OPFS (unified/worker) | IndexedDB page cache (unified/worker) | IndexedDB blob (oo1) |
+|-|----------------------|--------------------------------------|---------------------|
+| Durability | Every COMMIT | On `save()` / `close()` | On `save()` call |
+| Write cost | 4KB per changed page | 4KB per dirty block | Entire database blob |
+| Tab crash | Data safe | Data since last `save()` lost | Data since last `save()` lost |
+| Thread | Worker (auto) | Worker (auto) | Main thread |
+| Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers | All browsers |
 
 ### What's stored
 
-Both modes store encrypted bytes.  Without the key, the data is
+All modes store encrypted bytes.  Without the key, the data is
 opaque.  This is encryption at rest in the browser.
+
+### Export / Import (transport)
+
+Use `export()` to get a full encrypted database blob as a `Uint8Array`.
+This is suitable for download, upload, backup, or transfer between
+devices.
+
+Use `import(bytes)` to restore from a blob.  The database is replaced
+in-place; the same encryption key is reused.
+
+```js
+// Export
+var blob = await db.export();
+// blob is a Uint8Array — save to file, upload, etc.
+
+// Import
+var blob = /* fetch from server, file input, etc. */;
+await db.import(blob);
+// Database is now restored from the blob
+```
 
 ---
 

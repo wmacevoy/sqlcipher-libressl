@@ -1,24 +1,129 @@
 // ============================================================
-// sqlcipher-worker.js — Web Worker: SQLCipher + OPFS VFS
+// sqlcipher-worker.js — Web Worker: SQLCipher + OPFS / IndexedDB
 //
-// Loads the WASM module, provides OPFS file handles to the C VFS,
-// and processes database commands from the main thread.
+// Auto-detects best persistence:
+//   OPFS     — SyncAccessHandle, durable on every COMMIT
+//   IndexedDB — page cache (4KB blocks), durable on save() and close()
 //
-// Usage (main thread):
-//   var worker = new Worker("sqlcipher-worker.js");
-//   worker.postMessage({type: "open", filename: "/app.db", key: "secret"});
-//   worker.postMessage({type: "exec", sql: "CREATE TABLE t (x TEXT)"});
-//   worker.postMessage({type: "exec", sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
-//   worker.postMessage({type: "select", sql: "SELECT * FROM t"});
-//   // worker.onmessage receives results
+// Protocol (main thread ↔ worker):
+//   {type:"init"}                              → {ok, mode}
+//   {type:"open",  filename, key}              → {ok}
+//   {type:"exec",  sql, bind?}                 → {ok, changes}
+//   {type:"select",sql, bind?}                 → {ok, rows, names}
+//   {type:"save"}                              → {ok}
+//   {type:"export"}                            → {ok, bytes}  (transferable)
+//   {type:"import", bytes}                     → {ok}
+//   {type:"close"}                             → {ok}
 // ============================================================
 
 importScripts("sqlcipher.js");
 
-// ── OPFS handle table (used by C VFS via Module._opfs_*) ────
+// ── IndexedDB page store ──────────────────────────────────────
+//
+// Database files stored as 4 KB blocks in IndexedDB.
+// Keys: [filename, -1] → meta {fileSize}
+//       [filename, 0…N] → Uint8Array (one block)
 
-var _handles = [];   // [{sah, name}, ...]
+var _pageStore = {
+  BLOCK: 4096,
+
+  _open: function() {
+    return new Promise(function(resolve, reject) {
+      var req = indexedDB.open("sqlcipher_pages", 1);
+      req.onupgradeneeded = function() {
+        req.result.createObjectStore("blocks");
+      };
+      req.onsuccess = function() { resolve(req.result); };
+      req.onerror = function() { reject(req.error); };
+    });
+  },
+
+  /** Load entire file from IndexedDB → Uint8Array (or null). */
+  load: function(filename) {
+    var bs = this.BLOCK;
+    return this._open().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction("blocks", "readonly");
+        var store = tx.objectStore("blocks");
+        var metaReq = store.get([filename, -1]);
+        metaReq.onsuccess = function() {
+          var meta = metaReq.result;
+          if (!meta) { db.close(); resolve(null); return; }
+          var range = IDBKeyRange.bound([filename, 0], [filename, 9999999]);
+          var blocksReq = store.getAll(range);
+          var keysReq = store.getAllKeys(range);
+          var blocks, keys;
+          blocksReq.onsuccess = function() { blocks = blocksReq.result; check(); };
+          keysReq.onsuccess = function() { keys = keysReq.result; check(); };
+          function check() {
+            if (!blocks || !keys) return;
+            var buf = new Uint8Array(meta.fileSize);
+            for (var i = 0; i < keys.length; i++) {
+              var off = keys[i][1] * bs;
+              if (off < meta.fileSize) buf.set(new Uint8Array(blocks[i]), off);
+            }
+            db.close();
+            resolve(buf);
+          }
+        };
+        tx.onerror = function() { db.close(); reject(tx.error); };
+      });
+    });
+  },
+
+  /** Flush dirty blocks + meta to IndexedDB. */
+  flush: function(filename, buf, dirty) {
+    var bs = this.BLOCK;
+    return this._open().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction("blocks", "readwrite");
+        var store = tx.objectStore("blocks");
+        store.put({fileSize: buf.length}, [filename, -1]);
+        dirty.forEach(function(b) {
+          var start = b * bs;
+          if (start < buf.length) {
+            store.put(buf.slice(start, Math.min(start + bs, buf.length)),
+                      [filename, b]);
+          }
+        });
+        tx.oncomplete = function() { db.close(); resolve(); };
+        tx.onerror = function() { db.close(); reject(tx.error); };
+      });
+    });
+  },
+
+  /** Store an entire blob as pages (for import). */
+  storeBlob: function(filename, bytes) {
+    var bs = this.BLOCK;
+    return this._open().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction("blocks", "readwrite");
+        var store = tx.objectStore("blocks");
+        var range = IDBKeyRange.bound([filename, -1], [filename, 9999999]);
+        store.delete(range);
+        store.put({fileSize: bytes.length}, [filename, -1]);
+        var n = Math.ceil(bytes.length / bs);
+        for (var b = 0; b < n; b++) {
+          var start = b * bs;
+          store.put(bytes.slice(start, Math.min(start + bs, bytes.length)),
+                    [filename, b]);
+        }
+        tx.oncomplete = function() { db.close(); resolve(); };
+        tx.onerror = function() { db.close(); reject(tx.error); };
+      });
+    });
+  }
+};
+
+// ── Handle table ──────────────────────────────────────────────
+//
+// Each entry is one of:
+//   {type:"opfs", sah, name}
+//   {type:"idb",  buf, name, dirty, blockSize}
+
+var _handles = [];
 var _opfsRoot = null;
+var _useOpfs = false;
 
 async function _getDir(path) {
   var parts = path.split("/").filter(function(p) { return p.length > 0; });
@@ -30,151 +135,190 @@ async function _getDir(path) {
   return {dir: dir, filename: filename};
 }
 
-// Called by C VFS via EM_JS
-var _opfs = {
-  open: async function(name, flags) {
+// ── VFS operations (dispatch by handle type) ──────────────────
+
+var _vfs = {
+  openOpfs: async function(name, flags) {
     var loc = await _getDir(name);
-    var create = !!(flags & 0x04); // SQLITE_OPEN_CREATE
+    var create = !!(flags & 0x04);
     var fh = await loc.dir.getFileHandle(loc.filename, {create: create});
     var sah = await fh.createSyncAccessHandle();
     var hid = _handles.length;
-    _handles.push({sah: sah, name: name});
+    _handles.push({type: "opfs", sah: sah, name: name});
+    return hid;
+  },
+
+  openIdb: function(name, buf) {
+    var hid = _handles.length;
+    _handles.push({
+      type: "idb", buf: buf || new Uint8Array(0),
+      name: name, dirty: new Set(), blockSize: _pageStore.BLOCK
+    });
     return hid;
   },
 
   close: function(hid) {
-    if (_handles[hid]) {
-      _handles[hid].sah.flush();
-      _handles[hid].sah.close();
-      _handles[hid] = null;
-    }
+    var h = _handles[hid];
+    if (!h) return;
+    if (h.type === "opfs") { h.sah.flush(); h.sah.close(); }
+    _handles[hid] = null;
   },
 
   read: function(hid, pDest, n, offset) {
     var h = _handles[hid];
-    var buf = Module.HEAPU8.subarray(pDest, pDest + n);
-    var nRead = h.sah.read(buf, {at: offset});
-    if (nRead < n) {
-      // Zero-fill the rest (SQLite expects this for short reads)
-      Module.HEAPU8.fill(0, pDest + nRead, pDest + n);
-      return 522; // SQLITE_IOERR_SHORT_READ
+    if (h.type === "opfs") {
+      var buf = Module.HEAPU8.subarray(pDest, pDest + n);
+      var nRead = h.sah.read(buf, {at: offset});
+      if (nRead < n) {
+        Module.HEAPU8.fill(0, pDest + nRead, pDest + n);
+        return 522; // SQLITE_IOERR_SHORT_READ
+      }
+      return 0;
     }
-    return 0; // SQLITE_OK
+    var avail = Math.max(0, h.buf.length - offset);
+    var toCopy = Math.min(n, avail);
+    if (toCopy > 0)
+      Module.HEAPU8.set(h.buf.subarray(offset, offset + toCopy), pDest);
+    if (toCopy < n) {
+      Module.HEAPU8.fill(0, pDest + toCopy, pDest + n);
+      return 522;
+    }
+    return 0;
   },
 
   write: function(hid, pSrc, n, offset) {
     var h = _handles[hid];
-    var buf = Module.HEAPU8.subarray(pSrc, pSrc + n);
-    h.sah.write(buf, {at: offset});
+    if (h.type === "opfs") {
+      h.sah.write(Module.HEAPU8.subarray(pSrc, pSrc + n), {at: offset});
+      return 0;
+    }
+    var needed = offset + n;
+    if (needed > h.buf.length) {
+      var grow = new Uint8Array(needed);
+      grow.set(h.buf);
+      h.buf = grow;
+    }
+    h.buf.set(Module.HEAPU8.subarray(pSrc, pSrc + n), offset);
+    var bs = h.blockSize, s = Math.floor(offset / bs),
+        e = Math.floor((offset + n - 1) / bs);
+    for (var b = s; b <= e; b++) h.dirty.add(b);
     return 0;
   },
 
   sync: function(hid) {
-    _handles[hid].sah.flush();
+    var h = _handles[hid];
+    if (h.type === "opfs") h.sah.flush();
     return 0;
   },
 
   filesize: function(hid) {
-    return _handles[hid].sah.getSize();
+    var h = _handles[hid];
+    return h.type === "opfs" ? h.sah.getSize() : h.buf.length;
   },
 
   truncate: function(hid, size) {
-    _handles[hid].sah.truncate(size);
+    var h = _handles[hid];
+    if (h.type === "opfs") {
+      h.sah.truncate(size);
+    } else if (size !== h.buf.length) {
+      var t = new Uint8Array(size);
+      t.set(h.buf.subarray(0, Math.min(size, h.buf.length)));
+      h.buf = t;
+    }
     return 0;
   },
 
-  delete: async function(name) {
+  deleteFile: async function(name) {
+    if (!_useOpfs) return 0;
     try {
       var loc = await _getDir(name);
       await loc.dir.removeEntry(loc.filename);
       return 0;
-    } catch(e) {
-      return 10; // SQLITE_IOERR
-    }
+    } catch(e) { return 10; }
   },
 
   access: async function(name) {
+    if (!_useOpfs) return 0;
     try {
       var loc = await _getDir(name);
       await loc.dir.getFileHandle(loc.filename, {create: false});
       return 1;
-    } catch(e) {
-      return 0;
-    }
+    } catch(e) { return 0; }
   }
 };
 
-// ── WASM module setup ────────────────────────────────────────
+// ── WASM module setup ─────────────────────────────────────────
 
 var Module;
 var _api;
 var _dbPtr = 0;
 var _currentFilename = null;
+var _currentKey = null;
 
 async function init() {
-  _opfsRoot = await navigator.storage.getDirectory();
+  try {
+    _opfsRoot = await navigator.storage.getDirectory();
+    _useOpfs = true;
+  } catch(e) {
+    _useOpfs = false;
+  }
 
   Module = await initSqlcipher({
-    // Wire the OPFS callbacks into Module before WASM runs
-    _opfs_open: function(name, flags) {
-      // Synchronous wrapper — open must be sync for VFS.
-      // Pre-open handles or use a sync workaround.
-      // For the SAH pool pattern, we pre-open at DB.open time.
-      throw new Error("Use _opfs_open_async instead");
-    },
-    _opfs_close: function(hid) { _opfs.close(hid); },
-    _opfs_read: function(hid, pDest, n, offset) { return _opfs.read(hid, pDest, n, offset); },
-    _opfs_write: function(hid, pSrc, n, offset) { return _opfs.write(hid, pSrc, n, offset); },
-    _opfs_sync: function(hid) { return _opfs.sync(hid); },
-    _opfs_filesize: function(hid) { return _opfs.filesize(hid); },
-    _opfs_truncate: function(hid, size) { return _opfs.truncate(hid, size); },
-    _opfs_delete: function(name) { return 0; }, // async — handled separately
-    _opfs_access: function(name) { return 0; }  // async — handled separately
+    _opfs_close:    function(hid)              { _vfs.close(hid); },
+    _opfs_read:     function(hid, p, n, off)   { return _vfs.read(hid, p, n, off); },
+    _opfs_write:    function(hid, p, n, off)   { return _vfs.write(hid, p, n, off); },
+    _opfs_sync:     function(hid)              { return _vfs.sync(hid); },
+    _opfs_filesize: function(hid)              { return _vfs.filesize(hid); },
+    _opfs_truncate: function(hid, sz)          { return _vfs.truncate(hid, sz); },
+    _opfs_delete:   function()                 { return 0; },
+    _opfs_access:   function()                 { return 0; }
   });
 
+  if (!_useOpfs) {
+    Module._opfs_open_sync = function(name) {
+      return _vfs.openIdb(name);
+    };
+  }
+
   _api = {
-    open:       Module.cwrap("wasm_db_open",       "number",  ["string"]),
-    close:      Module.cwrap("wasm_db_close",       null,      ["number"]),
-    exec:       Module.cwrap("wasm_db_exec",        "number",  ["number", "string"]),
-    errmsg:     Module.cwrap("wasm_db_errmsg",      "string",  ["number"]),
-    changes:    Module.cwrap("wasm_db_changes",     "number",  ["number"]),
-    key:        Module.cwrap("wasm_db_key",         "number",  ["number", "string"]),
-    prepare:    Module.cwrap("wasm_db_prepare",     "number",  ["number", "string"]),
-    finalize:   Module.cwrap("wasm_stmt_finalize",  null,      ["number"]),
-    reset:      Module.cwrap("wasm_stmt_reset",     null,      ["number"]),
-    step:       Module.cwrap("wasm_stmt_step",      "number",  ["number"]),
-    bind_text:  Module.cwrap("wasm_stmt_bind_text", null,      ["number", "number", "string"]),
-    bind_int:   Module.cwrap("wasm_stmt_bind_int",  null,      ["number", "number", "number"]),
-    bind_dbl:   Module.cwrap("wasm_stmt_bind_double", null,    ["number", "number", "number"]),
-    bind_null:  Module.cwrap("wasm_stmt_bind_null", null,      ["number", "number"]),
-    columns:    Module.cwrap("wasm_stmt_columns",   "number",  ["number"]),
-    colname:    Module.cwrap("wasm_stmt_colname",   "string",  ["number", "number"]),
-    coltype:    Module.cwrap("wasm_stmt_coltype",   "number",  ["number", "number"]),
-    col_int:    Module.cwrap("wasm_stmt_int",       "number",  ["number", "number"]),
-    col_dbl:    Module.cwrap("wasm_stmt_double",    "number",  ["number", "number"]),
-    col_text:   Module.cwrap("wasm_stmt_text",      "string",  ["number", "number"]),
-    opfs_init:  Module.cwrap("sqlite3_opfs_init",   "number",  [])
+    open:       Module.cwrap("wasm_db_open",           "number",  ["string"]),
+    close:      Module.cwrap("wasm_db_close",           null,      ["number"]),
+    exec:       Module.cwrap("wasm_db_exec",            "number",  ["number", "string"]),
+    errmsg:     Module.cwrap("wasm_db_errmsg",          "string",  ["number"]),
+    changes:    Module.cwrap("wasm_db_changes",         "number",  ["number"]),
+    key:        Module.cwrap("wasm_db_key",             "number",  ["number", "string"]),
+    prepare:    Module.cwrap("wasm_db_prepare",         "number",  ["number", "string"]),
+    finalize:   Module.cwrap("wasm_stmt_finalize",      null,      ["number"]),
+    reset:      Module.cwrap("wasm_stmt_reset",         null,      ["number"]),
+    step:       Module.cwrap("wasm_stmt_step",          "number",  ["number"]),
+    bind_text:  Module.cwrap("wasm_stmt_bind_text",     null,      ["number", "number", "string"]),
+    bind_int:   Module.cwrap("wasm_stmt_bind_int",      null,      ["number", "number", "number"]),
+    bind_dbl:   Module.cwrap("wasm_stmt_bind_double",   null,      ["number", "number", "number"]),
+    bind_null:  Module.cwrap("wasm_stmt_bind_null",     null,      ["number", "number"]),
+    columns:    Module.cwrap("wasm_stmt_columns",       "number",  ["number"]),
+    colname:    Module.cwrap("wasm_stmt_colname",       "string",  ["number", "number"]),
+    coltype:    Module.cwrap("wasm_stmt_coltype",       "number",  ["number", "number"]),
+    col_int:    Module.cwrap("wasm_stmt_int",           "number",  ["number", "number"]),
+    col_dbl:    Module.cwrap("wasm_stmt_double",        "number",  ["number", "number"]),
+    col_text:   Module.cwrap("wasm_stmt_text",          "string",  ["number", "number"]),
+    opfs_init:  Module.cwrap("sqlite3_opfs_init",       "number",  [])
   };
 }
 
-// ── Command handler ──────────────────────────────────────────
+// ── SQL helpers ───────────────────────────────────────────────
 
 function _bind(stmt, args) {
   if (!args) return;
   for (var i = 0; i < args.length; i++) {
-    var v = args[i];
-    var idx = i + 1;
-    if (v === null || v === undefined) {
-      _api.bind_null(stmt, idx);
-    } else if (typeof v === "number") {
-      if (v === (v | 0) && v >= -2147483648 && v <= 2147483647) {
-        _api.bind_int(stmt, idx, v);
-      } else {
-        _api.bind_dbl(stmt, idx, v);
-      }
-    } else {
-      _api.bind_text(stmt, idx, String(v));
+    var v = args[i], idx = i + 1;
+    if (v === null || v === undefined)       _api.bind_null(stmt, idx);
+    else if (typeof v === "number") {
+      if (v === (v | 0) && v >= -2147483648 && v <= 2147483647)
+           _api.bind_int(stmt, idx, v);
+      else _api.bind_dbl(stmt, idx, v);
     }
+    else if (typeof v === "boolean")         _api.bind_int(stmt, idx, v ? 1 : 0);
+    else                                     _api.bind_text(stmt, idx, String(v));
   }
 }
 
@@ -183,17 +327,16 @@ function _query(sql, bind) {
   if (!stmt) throw new Error(_api.errmsg(_dbPtr));
   _bind(stmt, bind);
   var cols = _api.columns(stmt);
-  var names = [];
+  var names = [], rows = [];
   for (var i = 0; i < cols; i++) names.push(_api.colname(stmt, i));
-  var rows = [];
   while (_api.step(stmt)) {
     var row = {};
-    for (var i = 0; i < cols; i++) {
-      var t = _api.coltype(stmt, i);
-      if (t === 1) row[names[i]] = _api.col_int(stmt, i);
-      else if (t === 2) row[names[i]] = _api.col_dbl(stmt, i);
-      else if (t === 3) row[names[i]] = _api.col_text(stmt, i);
-      else row[names[i]] = null;
+    for (var j = 0; j < cols; j++) {
+      var t = _api.coltype(stmt, j);
+      if      (t === 1) row[names[j]] = _api.col_int(stmt, j);
+      else if (t === 2) row[names[j]] = _api.col_dbl(stmt, j);
+      else if (t === 3) row[names[j]] = _api.col_text(stmt, j);
+      else              row[names[j]] = null;
     }
     rows.push(row);
   }
@@ -201,31 +344,58 @@ function _query(sql, bind) {
   return {names: names, rows: rows};
 }
 
+/** Checkpoint WAL and flush dirty pages of the main DB to IndexedDB. */
+async function _checkpoint_and_flush() {
+  if (_useOpfs || !_dbPtr || !_currentFilename) return;
+  _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
+  var hid = Module._opfs_preopen && Module._opfs_preopen[_currentFilename];
+  if (hid === undefined) return;
+  var h = _handles[hid];
+  if (!h || h.type !== "idb") return;
+  await _pageStore.flush(_currentFilename, h.buf, h.dirty);
+  h.dirty.clear();
+}
+
+/** Pre-open a handle and register it for the C VFS. */
+function _preopen(filename, hid) {
+  if (!Module._opfs_preopen) Module._opfs_preopen = {};
+  Module._opfs_preopen[filename] = hid;
+}
+
+// ── Message handler ───────────────────────────────────────────
+
 async function handleMessage(msg) {
   var id = msg.id;
   try {
     switch (msg.type) {
+
       case "init":
         await init();
-        // Register OPFS VFS before opening any database
         _api.opfs_init();
-        postMessage({id: id, ok: true});
+        postMessage({id: id, ok: true, mode: _useOpfs ? "opfs" : "indexeddb"});
         break;
 
-      case "open":
-        if (_dbPtr) _api.close(_dbPtr);
-        // Pre-open OPFS handle for the main database file
-        var hid = await _opfs.open(msg.filename, 0x06); // CREATE|READWRITE
-        // Store in Module for the C VFS to find
-        if (!Module._opfs_preopen) Module._opfs_preopen = {};
-        Module._opfs_preopen[msg.filename] = hid;
+      case "open": {
+        if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
         _currentFilename = msg.filename;
+        _currentKey = msg.key || null;
+
+        var hid;
+        if (_useOpfs) {
+          hid = await _vfs.openOpfs(msg.filename, 0x06);
+        } else {
+          var bytes = await _pageStore.load(msg.filename);
+          hid = _vfs.openIdb(msg.filename, bytes);
+        }
+        _preopen(msg.filename, hid);
+
         _dbPtr = _api.open(msg.filename);
         if (msg.key) _api.key(_dbPtr, msg.key);
         postMessage({id: id, ok: true});
         break;
+      }
 
-      case "exec":
+      case "exec": {
         if (msg.bind) {
           var stmt = _api.prepare(_dbPtr, msg.sql);
           if (!stmt) throw new Error(_api.errmsg(_dbPtr));
@@ -238,24 +408,65 @@ async function handleMessage(msg) {
         }
         postMessage({id: id, ok: true, changes: _api.changes(_dbPtr)});
         break;
+      }
 
-      case "select":
+      case "select": {
         var result = _query(msg.sql, msg.bind);
         postMessage({id: id, ok: true, rows: result.rows, names: result.names});
         break;
+      }
 
-      case "export":
-        // Checkpoint WAL, then read the OPFS file as a blob
-        _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
-        var hid = Module._opfs_preopen[msg.filename || _currentFilename];
-        var size = _handles[hid].sah.getSize();
-        var bytes = new Uint8Array(size);
-        _handles[hid].sah.read(bytes, {at: 0});
-        postMessage({id: id, ok: true, bytes: bytes}, [bytes.buffer]);
+      case "save":
+        await _checkpoint_and_flush();
+        postMessage({id: id, ok: true});
         break;
 
-      case "close":
+      case "export": {
+        _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
+        var ehid = Module._opfs_preopen[_currentFilename];
+        var eh = _handles[ehid];
+        var out;
+        if (eh.type === "opfs") {
+          var sz = eh.sah.getSize();
+          out = new Uint8Array(sz);
+          eh.sah.read(out, {at: 0});
+        } else {
+          out = new Uint8Array(eh.buf);          // copy
+        }
+        postMessage({id: id, ok: true, bytes: out}, [out.buffer]);
+        break;
+      }
+
+      case "import": {
         if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+        var fn = msg.filename || _currentFilename;
+        var raw = new Uint8Array(msg.bytes);
+        var ihid;
+
+        if (_useOpfs) {
+          ihid = await _vfs.openOpfs(fn, 0x06);
+          _handles[ihid].sah.truncate(0);
+          _handles[ihid].sah.write(raw, {at: 0});
+          _handles[ihid].sah.flush();
+        } else {
+          await _pageStore.storeBlob(fn, raw);
+          ihid = _vfs.openIdb(fn, raw);
+        }
+        _preopen(fn, ihid);
+
+        _currentFilename = fn;
+        _dbPtr = _api.open(fn);
+        if (_currentKey) _api.key(_dbPtr, _currentKey);
+        postMessage({id: id, ok: true});
+        break;
+      }
+
+      case "close":
+        if (_dbPtr) {
+          await _checkpoint_and_flush();
+          _api.close(_dbPtr);
+          _dbPtr = 0;
+        }
         postMessage({id: id, ok: true});
         break;
 
@@ -267,6 +478,4 @@ async function handleMessage(msg) {
   }
 }
 
-onmessage = function(e) {
-  handleMessage(e.data);
-};
+onmessage = function(e) { handleMessage(e.data); };
