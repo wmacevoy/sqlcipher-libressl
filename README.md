@@ -20,7 +20,7 @@ cd ../..
 
 # Build SQLCipher with LibreSSL
 ./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
   LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make -j$(nproc)
 
@@ -113,7 +113,7 @@ OpenSSL-compatible crypto provider.  LibreSSL implements this API.
 
 ```bash
 ./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
   LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make -j$(nproc)
 ```
