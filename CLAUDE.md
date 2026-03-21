@@ -5,7 +5,7 @@
 sqlcipher-libressl — Encrypted SQLite everywhere.  Fork of SQLCipher
 v4.14.0 (SQLite 3.51.3) patched for LibreSSL and WASM.  Two patches
 over upstream.  Ships a WASM build with unified API — auto-detects OPFS
-(durable/commit) or IndexedDB page cache (durable/save) for
+(durable/commit) or IndexedDB page cache (durable/exec) for
 encrypted persistence in the browser.
 
 ## Architecture
@@ -56,7 +56,7 @@ cd test && ../testfixture sqlcipher.test
 
 # Web example (download release artifacts first)
 cd examples/web
-gh release download v0.2.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v0.2.3 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 ```
 

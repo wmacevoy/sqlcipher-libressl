@@ -54,7 +54,7 @@ Download from [Releases](https://github.com/wmacevoy/sqlcipher-libressl/releases
 ```bash
 cd examples/web
 # Download release files into this directory:
-gh release download v0.2.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v0.2.3 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
