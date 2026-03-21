@@ -1,9 +1,65 @@
 # sqlcipher-libressl
 
+[![build-test](https://github.com/wmacevoy/sqlcipher-libressl/actions/workflows/build-test.yml/badge.svg)](https://github.com/wmacevoy/sqlcipher-libressl/actions/workflows/build-test.yml)
+
 Fork of [SQLCipher](https://github.com/sqlcipher/sqlcipher) v4.14.0
 patched for **LibreSSL** compatibility and **Emscripten/WASM** builds.
 
 Two patches, three files changed, zero new dependencies.
+
+## Quick start
+
+```bash
+# Install LibreSSL (if not already available)
+curl -sL https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.0.0.tar.gz | tar xz
+cd libressl-4.0.0 && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
+  -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+make -j$(nproc) && make install
+cd ../..
+
+# Build SQLCipher with LibreSSL
+./configure --with-tempstore=yes \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+make -j$(nproc)
+
+# Run the example
+gcc -O2 -o basic examples/basic.c \
+  -I. -I$HOME/libressl/include \
+  -L.libs -L$HOME/libressl/lib \
+  -lsqlcipher -lcrypto -lpthread -ldl -lm
+LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
+```
+
+## Example
+
+`examples/basic.c` demonstrates encrypted database operations:
+
+```c
+#include "sqlite3.h"
+#include <string.h>
+
+sqlite3 *db;
+sqlite3_open("encrypted.db", &db);
+sqlite3_key(db, "secret", 6);
+
+sqlite3_exec(db, "CREATE TABLE t (k TEXT, v REAL)", 0, 0, 0);
+sqlite3_exec(db, "INSERT INTO t VALUES ('temp', 22.5)", 0, 0, 0);
+sqlite3_close(db);
+
+// Reopen with same key — data intact
+sqlite3_open("encrypted.db", &db);
+sqlite3_key(db, "secret", 6);
+// SELECT * FROM t → temp, 22.5
+
+// Without key — fails (file is encrypted on disk)
+sqlite3_open("encrypted.db", &db);
+// SELECT * FROM t → SQLITE_NOTADB
+```
+
+The full example (`examples/basic.c`) tests all four cases: create,
+reopen with correct key, attempt without key, attempt with wrong key.
 
 ## Patches
 
@@ -32,9 +88,48 @@ adds an `__EMSCRIPTEN__` guard that registers `sqlcipher_fini` via
 - **Native Linux/macOS:** original `.fini_array` / `__DATA,__mod_term_func`
 - **WASM:** `atexit(sqlcipher_fini)` registered via `__attribute__((constructor))`
 
+## Build
+
+### Prerequisites
+
+- C compiler (gcc or clang)
+- cmake
+- LibreSSL (built from source or installed)
+- tcl (for the full test suite)
+
+### Native build
+
+```bash
+./configure --with-tempstore=yes \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+make -j$(nproc)
+```
+
+### Amalgamation (for embedding or WASM)
+
+```bash
+make sqlite3.c   # produces sqlite3.c + sqlite3.h
+```
+
+### Test
+
+```bash
+# Smoke test (build + run the example)
+gcc -O2 -o basic examples/basic.c \
+  -I. -I$HOME/libressl/include \
+  -L.libs -L$HOME/libressl/lib \
+  -lsqlcipher -lcrypto -lpthread -ldl -lm
+LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
+
+# Full SQLCipher test suite (requires tcl)
+make testfixture
+cd test && ../testfixture sqlcipher.test
+```
+
 ## Usage
 
-### As a git submodule (recommended)
+### As a git submodule
 
 ```bash
 git submodule add git@github.com:wmacevoy/sqlcipher-libressl.git vendor/sqlcipher
@@ -46,36 +141,33 @@ git submodule add git@github.com:wmacevoy/sqlcipher-libressl.git vendor/sqlciphe
 git clone git@github.com:sqlcipher/sqlcipher.git
 cd sqlcipher
 git checkout v4.14.0
-# Apply the two patches:
 git diff 778ab890..0fced25d -- src/crypto_openssl.c src/sqlcipher.c | git apply
 ```
 
-### Building the amalgamation (for WASM)
-
-```bash
-cd vendor/sqlcipher
-./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
-  LDFLAGS="-L$HOME/libressl/lib -lssl -lcrypto"
-make sqlite3.c   # produces amalgamation: sqlite3.c + sqlite3.h
-```
+## WASM
 
 ### Compiling to WASM with Emscripten
 
 ```bash
-emcc sqlite3.c wyatt_wasm.c \
-  -I$HOME/libressl/include \
-  -L$HOME/libressl-wasm/lib \
+# Build LibreSSL for WASM first
+mkdir -p libressl-wasm && cd libressl-wasm
+emcmake cmake /path/to/libressl -DCMAKE_INSTALL_PREFIX=$HOME/libressl-wasm \
+  -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
+  -DCMAKE_C_FLAGS="-DHAVE_TIMEGM -DHAVE_GETENTROPY -D__STDC_NO_ATOMICS__"
+emmake make -j$(nproc) crypto
+cd ..
+
+# Build amalgamation, then compile to WASM
+make sqlite3.c
+emcc sqlite3.c your_wasm_wrapper.c \
+  -I$HOME/libressl/include -L$HOME/libressl-wasm/lib \
   -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL \
   -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=1 \
-  -DSQLITE_TEMP_STORE=2 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 \
   -s WASM=1 -s MODULARIZE=1 -s FILESYSTEM=1 \
   -s ALLOW_MEMORY_GROWTH=1 \
   $HOME/libressl-wasm/lib/libcrypto.a \
   -o sqlcipher.js
 ```
-
-Requires LibreSSL built separately for WASM with `emcmake cmake`.
 
 ### Entropy in WASM
 

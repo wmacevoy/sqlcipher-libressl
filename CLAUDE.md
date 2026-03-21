@@ -36,16 +36,36 @@ The patches are in the function `sqlcipher_openssl_hmac` (crypto_openssl.c)
 and the `sqlcipher_fini` registration block (sqlcipher.c ~line 406).
 If upstream changes these areas, the patches may need manual rebasing.
 
-## Building
-
-This is a standard SQLCipher checkout.  The amalgamation build:
+## Commands
 
 ```bash
+# Build (requires LibreSSL installed at $HOME/libressl)
 ./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I/path/to/libressl/include" \
-  LDFLAGS="-L/path/to/libressl/lib -lssl -lcrypto"
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+  LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+make -j$(nproc)
+
+# Build amalgamation
 make sqlite3.c
+
+# Smoke test
+gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
+  -L.libs -L$HOME/libressl/lib -lsqlcipher -lcrypto -lpthread -ldl -lm
+LD_LIBRARY_PATH=.libs:$HOME/libressl/lib ./basic
+
+# Full test suite (requires tcl)
+make testfixture
+cd test && ../testfixture sqlcipher.test
 ```
+
+## CI
+
+`.github/workflows/build-test.yml` runs on every push to master:
+1. Downloads and builds LibreSSL 4.0.0
+2. Configures and builds SQLCipher
+3. Builds the amalgamation
+4. Runs the smoke test (`examples/basic.c`)
+5. Runs the SQLCipher TCL test suite
 
 For WASM builds, see the README.
 

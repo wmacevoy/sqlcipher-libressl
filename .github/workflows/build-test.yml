@@ -1,0 +1,63 @@
+name: build-test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcl cmake automake autoconf libtool
+
+      - name: Download and build LibreSSL
+        run: |
+          curl -sL https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.0.0.tar.gz | tar xz
+          cd libressl-4.0.0
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
+            -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+          make -j$(nproc)
+          make install
+          echo "=== LibreSSL ==="
+          ls $HOME/libressl/lib/libssl.a $HOME/libressl/lib/libcrypto.a
+
+      - name: Configure SQLCipher with LibreSSL
+        run: |
+          ./configure --with-tempstore=yes \
+            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -I$HOME/libressl/include" \
+            LDFLAGS="-L$HOME/libressl/lib -lcrypto"
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Build amalgamation
+        run: |
+          make sqlite3.c
+          echo "=== Amalgamation ==="
+          ls -lh sqlite3.c sqlite3.h
+
+      - name: Smoke test — encrypted round-trip
+        run: |
+          gcc -O2 -o example_basic examples/basic.c \
+            -I. -I$HOME/libressl/include \
+            -L.libs -L$HOME/libressl/lib \
+            -lsqlcipher -lcrypto -lpthread -ldl -lm
+          export LD_LIBRARY_PATH=.libs:$HOME/libressl/lib
+          ./example_basic
+          echo "=== Smoke test passed ==="
+
+      - name: Run SQLCipher test suite
+        run: |
+          make testfixture
+          cd test
+          ../testfixture sqlcipher.test 2>&1 | tail -30
+          echo "=== SQLCipher tests complete ==="
