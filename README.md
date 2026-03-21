@@ -11,8 +11,9 @@ Two patches, three files changed, zero new dependencies.
 
 ```bash
 # Install LibreSSL (if not already available)
-git clone --depth 1 --branch v4.2.1 https://github.com/libressl/portable.git libressl
-cd libressl && mkdir build && cd build
+gh release download v4.2.1 --repo libressl/portable --pattern 'libressl-4.2.1.tar.gz'
+tar xzf libressl-4.2.1.tar.gz
+cd libressl-4.2.1 && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
   -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 make -j$(nproc) && make install

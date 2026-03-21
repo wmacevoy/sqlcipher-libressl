@@ -20,8 +20,9 @@ jobs:
 
       - name: Download and build LibreSSL
         run: |
-          git clone --depth 1 --branch v4.2.1 https://github.com/libressl/portable.git libressl
-          cd libressl
+          gh release download v4.2.1 --repo libressl/portable --pattern 'libressl-4.2.1.tar.gz'
+          tar xzf libressl-4.2.1.tar.gz
+          cd libressl-4.2.1
           mkdir build && cd build
           cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -73,8 +74,9 @@ jobs:
 
       - name: Download and build LibreSSL (native, for configure)
         run: |
-          git clone --depth 1 --branch v4.2.1 https://github.com/libressl/portable.git libressl
-          cd libressl
+          gh release download v4.2.1 --repo libressl/portable --pattern 'libressl-4.2.1.tar.gz'
+          tar xzf libressl-4.2.1.tar.gz
+          cd libressl-4.2.1
           mkdir build && cd build
           cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -90,7 +92,7 @@ jobs:
 
       - name: Build LibreSSL for WASM
         run: |
-          cd libressl
+          cd libressl-4.2.1
           mkdir -p build-wasm && cd build-wasm
           emcmake cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl-wasm \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
