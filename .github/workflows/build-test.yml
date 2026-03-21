@@ -104,12 +104,13 @@ jobs:
           cp sqlite3.c wasm/dist/
           cp sqlite3.h wasm/dist/
           cp wasm/sqlcipher_wasm.c wasm/dist/
+          cp wasm/opfs_vfs.c wasm/dist/
 
-          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_total_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_clear_bindings","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_bind_parameter_count","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_malloc","_free"]'
+          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_total_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_clear_bindings","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_bind_parameter_count","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_sqlite3_opfs_init","_malloc","_free"]'
           RUNTIME='["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
 
           cd wasm/dist
-          emcc sqlcipher_wasm.c \
+          emcc sqlcipher_wasm.c opfs_vfs.c \
             -I. -I$HOME/libressl/include \
             -L$HOME/libressl-wasm/lib \
             -O2 \
@@ -134,7 +135,7 @@ jobs:
             $HOME/libressl-wasm/lib/libcrypto.a \
             -o sqlcipher.js
 
-          rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c
+          rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c opfs_vfs.c
           ls -lh sqlcipher.js sqlcipher.wasm
 
       - name: Upload WASM artifacts
@@ -145,6 +146,7 @@ jobs:
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
             wasm/sqlcipher-oo1.js
+            wasm/sqlcipher-worker.js
           retention-days: 90
 
   release:
@@ -176,6 +178,7 @@ jobs:
             dist/sqlcipher.js \
             dist/sqlcipher.wasm \
             dist/sqlcipher-oo1.js \
+            dist/sqlcipher-worker.js \
             --title "SQLCipher WASM ${{ github.ref_name }}" \
             --notes "$(cat <<'NOTES'
           Encrypted SQLite in the browser — SQLCipher + LibreSSL, compiled to WASM.
@@ -186,7 +189,8 @@ jobs:
           |------|-------------|
           | `sqlcipher.js` | Emscripten glue (~94KB) |
           | `sqlcipher.wasm` | Compiled binary (~1.4MB) |
-          | `sqlcipher-oo1.js` | oo1 API shim + IndexedDB persistence |
+          | `sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB fallback) |
+          | `sqlcipher-worker.js` | Web Worker with OPFS VFS (durable persistence) |
 
           ## Quick start
 
