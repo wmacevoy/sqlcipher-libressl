@@ -5,43 +5,33 @@
 Encrypted SQLite — in the browser, on the server, everywhere.
 
 Fork of [SQLCipher](https://github.com/sqlcipher/sqlcipher) v4.14.0
-patched for **LibreSSL** and **WASM**.  Two patches, three files changed.
+patched for **LibreSSL** and **WASM**.  Two patches, two files changed.
 
-## Browser: encrypted SQLite with OPFS persistence
+## Browser: encrypted SQLite that just works
 
-Every COMMIT is durable.  No manual save.  Survives tab close, crash,
-browser restart.  Data encrypted at rest in the Origin Private File System.
+Auto-detects the best persistence backend — OPFS (durable per commit)
+or IndexedDB page cache (durable on save/close).  Same API either way.
 
 ```html
 <script src="sqlcipher.js"></script>
+<script src="sqlcipher-api.js"></script>
 <script>
-var worker = new Worker("sqlcipher-worker.js");
-var _id = 0, _pending = {};
-
-function send(msg) {
-  return new Promise(function(resolve, reject) {
-    msg.id = ++_id;
-    _pending[msg.id] = {resolve: resolve, reject: reject};
-    worker.postMessage(msg);
-  });
-}
-worker.onmessage = function(e) {
-  var p = _pending[e.data.id]; delete _pending[e.data.id];
-  if (e.data.ok) p.resolve(e.data); else p.reject(new Error(e.data.error));
-};
-
 (async function() {
-  await send({type: "init"});
-  await send({type: "open", filename: "/app.db", key: "secret"});
-  await send({type: "exec", sql: "CREATE TABLE IF NOT EXISTS t (x TEXT)"});
-  await send({type: "exec", sql: "INSERT INTO t VALUES (?)", bind: ["hello"]});
+  var db = await SQLCipher.open({filename: "app.db", key: "secret"});
+  console.log("Backend:", db.mode);  // "opfs" or "indexeddb"
 
-  var result = await send({type: "select", sql: "SELECT * FROM t"});
-  console.log(result.rows);  // [{x: "hello"}]
+  await db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
+  await db.exec("INSERT INTO t VALUES (?)", ["hello"]);
+
+  var rows = await db.select("SELECT * FROM t");
+  console.log(rows);  // [{x: "hello"}]
+
+  await db.save();    // indexeddb: flush dirty pages. opfs: no-op.
 
   // Export encrypted blob (for backup, server sync, etc.)
-  var backup = await send({type: "export"});
-  // backup.bytes is a Uint8Array — the encrypted SQLite file
+  var backup = await db.export();
+
+  await db.close();   // indexeddb: auto-saves. both: close.
 })();
 </script>
 ```
@@ -54,38 +44,56 @@ Download from [Releases](https://github.com/wmacevoy/sqlcipher-libressl/releases
 |------|-------------|
 | `sqlcipher.js` | Emscripten glue |
 | `sqlcipher.wasm` | Compiled binary (~1.4MB) |
-| `sqlcipher-oo1.js` | [oo1 API](https://sqlite.org/wasm/doc/trunk/api-oo1.md) shim (main thread, IndexedDB fallback) |
-| `sqlcipher-worker.js` | Web Worker with OPFS VFS (durable persistence) |
+| `sqlcipher-api.js` | Unified API — auto-detects OPFS / IndexedDB |
+| `sqlcipher-oo1.js` | [oo1 API](https://sqlite.org/wasm/doc/trunk/api-oo1.md) shim (main thread, IndexedDB blob) |
+| `sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
+| `sqlcipher-wasm-static.tar.gz` | Static libs for custom WASM builds |
 
 ### Run the example
 
 ```bash
 cd examples/web
 # Download release files into this directory:
-gh release download v0.1.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v0.2.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-### Two persistence modes
+### Unified API
 
-| | OPFS VFS (Worker) | IndexedDB (main thread) |
-|-|-------------------|------------------------|
-| **Durability** | Every COMMIT | On `db.save()` call |
-| **Write cost** | 4KB per changed page | Entire database blob |
-| **Tab crash** | Data safe | Data since last save lost |
-| **Requires** | Web Worker | Nothing extra |
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `SQLCipher.open({filename, key})` | `Promise<Handle>` | Open/create database. Auto-detects backend. |
+| `db.exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. |
+| `db.select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects. |
+| `db.save()` | `Promise<void>` | IndexedDB: flush dirty 4KB pages. OPFS: no-op. |
+| `db.export()` | `Promise<Uint8Array>` | Full encrypted blob for transport. |
+| `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob. |
+| `db.shred()` | `Promise<void>` | Overwrite all storage with random data + delete. |
+| `db.close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. |
+| `db.mode` | `string` | `"opfs"` or `"indexeddb"` |
+
+### Persistence
+
+| | OPFS (auto, preferred) | IndexedDB page cache (auto, fallback) |
+|-|----------------------|--------------------------------------|
+| **Durability** | Every COMMIT | On `save()` / `close()` |
+| **Write cost** | 4KB per changed page | 4KB per dirty block |
+| **Tab crash** | Data safe | Data since last `save()` lost |
 | **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
 
 ### Worker message protocol
 
 | Message | Fields | Response |
 |---------|--------|----------|
-| `init` | — | `{ok}` |
+| `init` | — | `{ok, mode}` |
 | `open` | `filename`, `key` | `{ok}` |
 | `exec` | `sql`, `bind?` | `{ok, changes}` |
 | `select` | `sql`, `bind?` | `{ok, rows, names}` |
+| `save` | — | `{ok}` |
 | `export` | — | `{ok, bytes}` |
+| `import` | `bytes` | `{ok}` |
+| `shred` | — | `{ok}` |
 | `close` | — | `{ok}` |
 
 ## Native C
@@ -169,23 +177,24 @@ guard using `atexit()` for key zeroing.
 ```
 wasm/
   sqlcipher_wasm.c      C helpers for JS<->WASM boundary
-  opfs_vfs.c            OPFS-backed SQLite VFS (durable persistence)
-  sqlcipher-oo1.js      oo1 API shim (main thread, IndexedDB)
-  sqlcipher-worker.js   Web Worker (OPFS VFS, postMessage protocol)
+  opfs_vfs.c            SQLite VFS — dispatches to OPFS or IndexedDB page cache
+  sqlcipher-api.js      Unified API (recommended)
+  sqlcipher-oo1.js      oo1 API shim (main thread, IndexedDB blob)
+  sqlcipher-worker.js   Web Worker — auto-detects OPFS / IndexedDB
 
 examples/
   basic.c               Native C encrypted round-trip
-  web/index.html         Browser demo (Worker + OPFS)
+  web/index.html        Browser demo (unified API)
 
 docs/
-  oo1-api.md            Full oo1 API reference + persistence docs
+  oo1-api.md            Full API reference + persistence docs
 ```
 
 ## Documentation
 
 | Doc | Scope |
 |-----|-------|
-| [docs/oo1-api.md](docs/oo1-api.md) | oo1 API reference, persistence (OPFS + IndexedDB), worker protocol |
+| [docs/oo1-api.md](docs/oo1-api.md) | Unified API, oo1 API, persistence (OPFS + IndexedDB page cache), worker protocol, shred |
 
 ## Upstream
 

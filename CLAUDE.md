@@ -4,8 +4,9 @@
 
 sqlcipher-libressl — Encrypted SQLite everywhere.  Fork of SQLCipher
 v4.14.0 (SQLite 3.51.3) patched for LibreSSL and WASM.  Two patches
-over upstream.  Ships a WASM build with OPFS VFS for durable encrypted
-persistence in the browser.
+over upstream.  Ships a WASM build with unified API — auto-detects OPFS
+(durable/commit) or IndexedDB page cache (durable/save) for
+encrypted persistence in the browser.
 
 ## Architecture
 
@@ -55,7 +56,7 @@ cd test && ../testfixture sqlcipher.test
 
 # Web example (download release artifacts first)
 cd examples/web
-gh release download v0.1.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v0.2.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 ```
 
@@ -65,7 +66,8 @@ python3 -m http.server 8000
 - **native job**: build with LibreSSL v4.2.1, smoke test, TCL test suite
 - **wasm job**: build amalgamation, LibreSSL for WASM, compile with OPFS VFS
 - **release job** (on `v*` tags): creates GitHub release with
-  `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-api.js`, `sqlcipher-oo1.js`, `sqlcipher-worker.js`
+  `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-api.js`, `sqlcipher-oo1.js`,
+  `sqlcipher-worker.js`, `sqlcipher-wasm-static.tar.gz` (amalgamation + libcrypto-wasm.a + headers)
 
 ## Remotes
 
