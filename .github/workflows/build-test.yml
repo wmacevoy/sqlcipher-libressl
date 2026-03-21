@@ -46,9 +46,7 @@ jobs:
         run: |
           gcc -O2 -o example_basic examples/basic.c \
             -I. -I$HOME/libressl/include \
-            -L.libs \
-            -Wl,-rpath,.libs \
-            -lsqlcipher $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
+            libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
           ./example_basic
 
       - name: Run SQLCipher test suite
