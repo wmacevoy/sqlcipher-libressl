@@ -568,7 +568,8 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
 | `shred()` | `Promise<void>` | Overwrite all stored blocks with random data, then delete. Handle is unusable after. |
-| `close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Handle is unusable after. |
+| `shredOnClose()` | `Promise<void>` | Set flag: `close()` will shred instead of save. Call early to ensure destruction on exit. |
+| `close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. If `shredOnClose()` was called, shreds instead. |
 
 #### Handle properties
 
@@ -624,6 +625,7 @@ A 10 MB database with 1 changed page writes 4 KB on save, not 10 MB.
 | `export` | — | `{ok, bytes}` (Uint8Array, transferable) |
 | `import` | `bytes` | `{ok}` |
 | `shred` | — | `{ok}` |
+| `shredOnClose` | — | `{ok}` |
 | `close` | — | `{ok}` |
 
 ---
@@ -729,6 +731,20 @@ await db.shred();
 
 This is defense-in-depth — the data is already encrypted, but shred
 ensures the ciphertext itself is destroyed in storage.
+
+### shredOnClose
+
+Set a flag so that `close()` will shred instead of save. Useful for
+session-scoped databases that should always be destroyed on exit.
+
+```js
+var db = await SQLCipher.open({filename: "session.db", key: "secret"});
+await db.shredOnClose();  // set the flag early
+
+// ... use the database normally ...
+
+await db.close();  // this now shreds instead of saving
+```
 
 ---
 

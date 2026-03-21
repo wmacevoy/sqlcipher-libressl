@@ -70,7 +70,8 @@ python3 -m http.server 8000
 | `db.export()` | `Promise<Uint8Array>` | Full encrypted blob for transport. |
 | `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob. |
 | `db.shred()` | `Promise<void>` | Overwrite all storage with random data + delete. |
-| `db.close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. |
+| `db.shredOnClose()` | `Promise<void>` | Flag: `close()` will shred instead of save. |
+| `db.close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Shreds if flagged. |
 | `db.mode` | `string` | `"opfs"` or `"indexeddb"` |
 
 ### Persistence
@@ -94,6 +95,7 @@ python3 -m http.server 8000
 | `export` | — | `{ok, bytes}` |
 | `import` | `bytes` | `{ok}` |
 | `shred` | — | `{ok}` |
+| `shredOnClose` | — | `{ok}` |
 | `close` | — | `{ok}` |
 
 ## Native C

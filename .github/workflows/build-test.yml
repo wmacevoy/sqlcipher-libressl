@@ -138,6 +138,26 @@ jobs:
           rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c opfs_vfs.c
           ls -lh sqlcipher.js sqlcipher.wasm
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Prepare WASM test directory
+        run: |
+          cp wasm/dist/sqlcipher.js tests/wasm/
+          cp wasm/dist/sqlcipher.wasm tests/wasm/
+          cp wasm/sqlcipher-api.js tests/wasm/
+          cp wasm/sqlcipher-worker.js tests/wasm/
+
+      - name: Install Playwright
+        run: |
+          npm install -g playwright
+          playwright install --with-deps chromium
+
+      - name: Run WASM tests
+        run: node tests/wasm/run-tests.mjs
+
       - name: Package static libs for custom WASM builds
         run: |
           mkdir -p static-pkg

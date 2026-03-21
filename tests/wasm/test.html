@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>SQLCipher WASM Tests</title></head>
+<body>
+<pre id="log"></pre>
+<div id="result" data-status="running" data-passed="0" data-failed="0" data-total="0"></div>
+<script src="sqlcipher.js"></script>
+<script src="sqlcipher-api.js"></script>
+<script>
+(async function() {
+  var logEl = document.getElementById("log");
+  var resultEl = document.getElementById("result");
+  var passed = 0, failed = 0, total = 0;
+
+  function log(msg) {
+    logEl.textContent += msg + "\n";
+    console.log(msg);
+  }
+
+  async function test(name, fn) {
+    total++;
+    try {
+      await fn();
+      passed++;
+      log("PASS: " + name);
+    } catch(e) {
+      failed++;
+      log("FAIL: " + name + " -- " + e.message);
+    }
+    resultEl.dataset.passed = passed;
+    resultEl.dataset.failed = failed;
+    resultEl.dataset.total = total;
+  }
+
+  function assert(cond, msg) {
+    if (!cond) throw new Error(msg || "assertion failed");
+  }
+
+  function assertEqual(a, b, msg) {
+    if (a !== b) throw new Error((msg || "assertEqual") + ": " + JSON.stringify(a) + " !== " + JSON.stringify(b));
+  }
+
+  // ── Tests ──────────────────────────────────────────────────
+
+  await test("open and close", async function() {
+    var db = await SQLCipher.open({filename: "/t1.db", key: "k1"});
+    assert(db.mode === "opfs" || db.mode === "indexeddb", "bad mode: " + db.mode);
+    assertEqual(db.filename, "/t1.db", "filename");
+    await db.close();
+  });
+
+  await test("exec and select with bind params", async function() {
+    var db = await SQLCipher.open({filename: "/t2.db", key: "k2"});
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val REAL)");
+    await db.exec("INSERT INTO t VALUES (?, ?, ?)", [1, "alice", 3.14]);
+    await db.exec("INSERT INTO t VALUES (?, ?, ?)", [2, "bob", 2.72]);
+    var rows = await db.select("SELECT * FROM t ORDER BY id");
+    assertEqual(rows.length, 2, "row count");
+    assertEqual(rows[0].name, "alice", "row 0 name");
+    assertEqual(rows[1].val, 2.72, "row 1 val");
+    var filtered = await db.select("SELECT name FROM t WHERE val > ?", [3.0]);
+    assertEqual(filtered.length, 1, "filtered count");
+    assertEqual(filtered[0].name, "alice", "filtered name");
+    await db.close();
+  });
+
+  await test("changes count", async function() {
+    var db = await SQLCipher.open({filename: "/t3.db", key: "k3"});
+    await db.exec("CREATE TABLE t (x INTEGER)");
+    var r1 = await db.exec("INSERT INTO t VALUES (1)");
+    assertEqual(r1.changes, 1, "single insert");
+    await db.exec("INSERT INTO t VALUES (2)");
+    await db.exec("INSERT INTO t VALUES (3)");
+    var r2 = await db.exec("DELETE FROM t WHERE x >= 2");
+    assertEqual(r2.changes, 2, "multi-row delete");
+    await db.close();
+  });
+
+  await test("save", async function() {
+    var db = await SQLCipher.open({filename: "/t4.db", key: "k4"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('saved')");
+    await db.save();
+    await db.close();
+  });
+
+  await test("export returns Uint8Array", async function() {
+    var db = await SQLCipher.open({filename: "/t5.db", key: "k5"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('exported')");
+    var blob = await db.export();
+    assert(blob instanceof Uint8Array, "should be Uint8Array");
+    assert(blob.length >= 4096, "should be at least one page, got " + blob.length);
+    await db.close();
+  });
+
+  await test("import restores from blob", async function() {
+    var db = await SQLCipher.open({filename: "/t6.db", key: "k6"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('original')");
+    var blob = await db.export();
+    await db.exec("DELETE FROM t");
+    await db.exec("INSERT INTO t VALUES ('modified')");
+    var before = await db.select("SELECT x FROM t");
+    assertEqual(before[0].x, "modified", "before import");
+    await db.import(blob);
+    var after = await db.select("SELECT x FROM t");
+    assertEqual(after.length, 1, "after import count");
+    assertEqual(after[0].x, "original", "after import value");
+    await db.close();
+  });
+
+  await test("shred", async function() {
+    var db = await SQLCipher.open({filename: "/t7.db", key: "k7"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('secret')");
+    await db.save();
+    await db.shred();
+    // Reopen: should be a fresh empty database (file was deleted)
+    var db2 = await SQLCipher.open({filename: "/t7.db", key: "k7"});
+    var rows = await db2.select("SELECT count(*) as n FROM sqlite_master");
+    assertEqual(rows[0].n, 0, "shredded DB should be empty on reopen");
+    await db2.close();
+  });
+
+  await test("persistence across close and reopen", async function() {
+    var db = await SQLCipher.open({filename: "/t8.db", key: "k8"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('persisted')");
+    await db.save();
+    await db.close();
+    var db2 = await SQLCipher.open({filename: "/t8.db", key: "k8"});
+    var rows = await db2.select("SELECT x FROM t");
+    assertEqual(rows.length, 1, "persisted count");
+    assertEqual(rows[0].x, "persisted", "persisted value");
+    await db2.close();
+  });
+
+  await test("wrong key rejection", async function() {
+    var db = await SQLCipher.open({filename: "/t9.db", key: "correctkey"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('secret')");
+    await db.save();
+    await db.close();
+    var db2 = await SQLCipher.open({filename: "/t9.db", key: "wrongkey"});
+    var threw = false;
+    try {
+      await db2.select("SELECT * FROM t");
+    } catch(e) {
+      threw = true;
+    }
+    assert(threw, "wrong key should cause SELECT to fail");
+    try { await db2.close(); } catch(e) {}
+  });
+
+  await test("shredOnClose", async function() {
+    var db = await SQLCipher.open({filename: "/t10.db", key: "k10"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('doomed')");
+    await db.save();
+    await db.shredOnClose();
+    await db.close();
+    // Reopen: should be fresh empty database
+    var db2 = await SQLCipher.open({filename: "/t10.db", key: "k10"});
+    var rows = await db2.select("SELECT count(*) as n FROM sqlite_master");
+    assertEqual(rows[0].n, 0, "shredOnClose DB should be empty on reopen");
+    await db2.close();
+  });
+
+  // ── Report ─────────────────────────────────────────────────
+
+  resultEl.dataset.status = failed === 0 ? "pass" : "fail";
+  log("\n" + passed + "/" + total + " passed" +
+      (failed > 0 ? ", " + failed + " FAILED" : ""));
+})();
+</script>
+</body>
+</html>

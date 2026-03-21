@@ -14,6 +14,7 @@
 //   {type:"export"}                            → {ok, bytes}  (transferable)
 //   {type:"import", bytes}                     → {ok}
 //   {type:"shred"}                             → {ok}  (overwrite + delete)
+//   {type:"shredOnClose"}                      → {ok}  (flag: close will shred)
 //   {type:"close"}                             → {ok}
 // ============================================================
 
@@ -268,6 +269,7 @@ var _api;
 var _dbPtr = 0;
 var _currentFilename = null;
 var _currentKey = null;
+var _shredOnClose = false;
 
 async function init() {
   try {
@@ -368,6 +370,51 @@ async function _checkpoint_and_flush() {
   if (!h || h.type !== "idb") return;
   await _pageStore.flush(_currentFilename, h.buf, h.dirty);
   h.dirty.clear();
+}
+
+/** Overwrite all stored data with random bytes, close DB, delete file. */
+async function _shred() {
+  var sfn = _currentFilename;
+  if (!sfn) return;
+
+  // Capture handle info BEFORE close (close nulls handles via VFS xClose)
+  var shid = Module._opfs_preopen && Module._opfs_preopen[sfn];
+  var sh = shid !== undefined ? _handles[shid] : null;
+  var handleType = sh ? sh.type : null;
+  var fileSize = 0;
+  if (handleType === "opfs") fileSize = sh.sah.getSize();
+  else if (handleType === "idb") fileSize = sh.buf.length;
+
+  // Close the database (nulls handles)
+  if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+
+  if (handleType === "opfs") {
+    // Reopen OPFS file, overwrite with random, delete
+    try {
+      var loc = await _getDir(sfn);
+      var fh = await loc.dir.getFileHandle(loc.filename, {create: false});
+      var sah = await fh.createSyncAccessHandle();
+      var rnd = new Uint8Array(fileSize);
+      crypto.getRandomValues(rnd);
+      sah.write(rnd, {at: 0});
+      sah.flush();
+      sah.close();
+      await loc.dir.removeEntry(loc.filename);
+    } catch(e) { /* file may already be gone */ }
+  } else if (handleType === "idb") {
+    // Overwrite IndexedDB blocks with random, then delete
+    var numBlocks = Math.ceil(fileSize / _pageStore.BLOCK);
+    var allDirty = new Set();
+    for (var bi = 0; bi < numBlocks; bi++) allDirty.add(bi);
+    var rndBuf = new Uint8Array(fileSize);
+    crypto.getRandomValues(rndBuf);
+    await _pageStore.flush(sfn, rndBuf, allDirty);
+    await _pageStore.deleteFile(sfn);
+  }
+
+  _currentFilename = null;
+  _currentKey = null;
+  _shredOnClose = false;
 }
 
 /** Pre-open a handle and register it for the C VFS. */
@@ -475,48 +522,25 @@ async function handleMessage(msg) {
         break;
       }
 
-      case "shred": {
-        // Overwrite all stored data with random bytes, then delete.
-        var sfn = _currentFilename;
-        if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
-        var shid = Module._opfs_preopen && Module._opfs_preopen[sfn];
-        var sh = shid !== undefined ? _handles[shid] : null;
-
-        if (sh && sh.type === "opfs") {
-          // Overwrite OPFS file with random data, then delete
-          var sz = sh.sah.getSize();
-          var rnd = new Uint8Array(sz);
-          crypto.getRandomValues(rnd);
-          sh.sah.write(rnd, {at: 0});
-          sh.sah.flush();
-          sh.sah.close();
-          _handles[shid] = null;
-          var loc = await _getDir(sfn);
-          try { await loc.dir.removeEntry(loc.filename); } catch(e) {}
-        } else if (sh && sh.type === "idb") {
-          // Overwrite IndexedDB blocks with random data, then delete
-          var meta = {fileSize: sh.buf.length};
-          var numBlocks = Math.ceil(meta.fileSize / _pageStore.BLOCK);
-          var allDirty = new Set();
-          for (var bi = 0; bi < numBlocks; bi++) allDirty.add(bi);
-          crypto.getRandomValues(sh.buf);
-          await _pageStore.flush(sfn, sh.buf, allDirty);
-          // Now delete all blocks
-          await _pageStore.deleteFile(sfn);
-          _handles[shid] = null;
-        }
-
-        _currentFilename = null;
-        _currentKey = null;
+      case "shred":
+        await _shred();
         postMessage({id: id, ok: true});
         break;
-      }
+
+      case "shredOnClose":
+        _shredOnClose = true;
+        postMessage({id: id, ok: true});
+        break;
 
       case "close":
         if (_dbPtr) {
-          await _checkpoint_and_flush();
-          _api.close(_dbPtr);
-          _dbPtr = 0;
+          if (_shredOnClose) {
+            await _shred();
+          } else {
+            await _checkpoint_and_flush();
+            _api.close(_dbPtr);
+            _dbPtr = 0;
+          }
         }
         postMessage({id: id, ok: true});
         break;

@@ -13,8 +13,9 @@
 //   await db.save();     // indexeddb: flush dirty pages. opfs: no-op.
 //   var blob = await db.export();   // Uint8Array — full encrypted DB
 //   await db.import(blob);          // restore from blob
-//   await db.shred();               // overwrite with random + delete
-//   await db.close();               // auto-saves on indexeddb
+//   await db.shredOnClose();        // flag: close() will shred instead of save
+//   await db.shred();               // overwrite with random + delete (immediate)
+//   await db.close();               // auto-saves on indexeddb (or shreds if flagged)
 //
 // Requires (same directory or adjust workerUrl):
 //   sqlcipher.js, sqlcipher.wasm, sqlcipher-worker.js
@@ -106,6 +107,15 @@ var SQLCipher = (function() {
     return this._send(
       {type: "import", bytes: copy, filename: this.filename}, [copy]
     ).then(function() {});
+  };
+
+  /**
+   * Set flag: close() will shred instead of save.
+   * Call early to ensure destruction even if close is called from cleanup code.
+   * @returns {Promise<void>}
+   */
+  Handle.prototype.shredOnClose = function() {
+    return this._send({type: "shredOnClose"}).then(function() {});
   };
 
   /**
