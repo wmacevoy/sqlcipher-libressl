@@ -30,6 +30,7 @@ Browser:  SQLCipher WASM + VFS → encrypted, durable, no server
 | `wasm/sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB blob) |
 | `wasm/sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
 | `examples/basic.c` | Native C smoke test |
+| `build-sqlcipher-libressl.sh` | WASM build script (amalgamation + emcc + JS helpers) |
 | `examples/web/index.html` | Browser demo (unified API) |
 | `docs/oo1-api.md` | Full API reference + persistence docs |
 
@@ -56,18 +57,22 @@ cd test && ../testfixture sqlcipher.test
 
 # Web example (download release artifacts first)
 cd examples/web
-gh release download v0.2.3 --repo wmacevoy/sqlcipher-libressl
+gh release download v1.0.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 ```
 
 ## CI
 
 `.github/workflows/build-test.yml`:
-- **native job**: build with LibreSSL v4.2.1, smoke test, TCL test suite
-- **wasm job**: build amalgamation, LibreSSL for WASM, compile with OPFS VFS
-- **release job** (on `v*` tags): creates GitHub release with
+- **native job** (5-platform matrix): build with LibreSSL v4.2.1, smoke test on all;
+  TCL test suite on linux-glibc-x64.  Platforms: debian-glibc-x64,
+  debian-glibc-arm64, alpine-musl-x64, macos-arm64, macos-x64.
+- **wasm job**: calls `build-sqlcipher-libressl.sh`, Playwright browser tests
+- **release job** (on `v*` tags): creates GitHub release via
+  `softprops/action-gh-release@v2` with native `.a` libs + WASM artifacts:
   `sqlcipher.js`, `sqlcipher.wasm`, `sqlcipher-api.js`, `sqlcipher-oo1.js`,
-  `sqlcipher-worker.js`, `sqlcipher-wasm-static.tar.gz` (amalgamation + libcrypto-wasm.a + headers)
+  `sqlcipher-worker.js`, `sqlcipher-wasm-static.tar.gz`,
+  `libsqlcipher-{platform}.a` (5 platforms)
 
 ## Remotes
 
