@@ -10,14 +10,41 @@ on:
 
 jobs:
   native:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Debian (glibc) — works on Debian, Ubuntu, RHEL, etc.
+          - os: ubuntu-latest
+            container: debian:bookworm
+            artifact: libsqlcipher-linux-glibc-x64.a
+            deps: apt-get update && apt-get install -y gcc make cmake tcl tcl-dev curl ca-certificates
+          - os: ubuntu-24.04-arm
+            container: debian:bookworm
+            artifact: libsqlcipher-linux-glibc-arm64.a
+            deps: apt-get update && apt-get install -y gcc make cmake tcl tcl-dev curl ca-certificates
+          # Alpine (musl) — works on Alpine, Docker scratch, etc.
+          - os: ubuntu-latest
+            container: alpine:3.19
+            artifact: libsqlcipher-linux-musl-x64.a
+            deps: apk add gcc make cmake musl-dev tcl tcl-dev curl
+          # macOS
+          - os: macos-latest
+            container: ""
+            artifact: libsqlcipher-macos-arm64.a
+            deps: ""
+          - os: macos-15
+            container: ""
+            artifact: libsqlcipher-macos-x64.a
+            deps: ""
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || null }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tcl tcl-dev cmake
+        if: matrix.deps != ''
+        run: ${{ matrix.deps }}
 
       - name: Download and build LibreSSL
         run: |
@@ -51,9 +78,18 @@ jobs:
           ./example_basic
 
       - name: Run SQLCipher test suite
+        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
         run: |
           make testfixture
           cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
+
+      - name: Rename artifact
+        run: cp libsqlite3.a ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
   wasm:
     runs-on: ubuntu-latest
@@ -70,7 +106,7 @@ jobs:
         with:
           version: 3.1.74
 
-      - name: Download and build LibreSSL (native, for configure)
+      - name: Download and build LibreSSL (native + WASM)
         run: |
           curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
           cd libressl-4.2.1
@@ -79,17 +115,7 @@ jobs:
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
           make -j$(nproc)
           make install
-
-      - name: Build SQLCipher amalgamation
-        run: |
-          ./configure --with-tempstore=yes \
-            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
-            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-          make sqlite3.c
-
-      - name: Build LibreSSL for WASM
-        run: |
-          cd libressl-4.2.1
+          cd ..
           mkdir -p build-wasm && cd build-wasm
           emcmake cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl-wasm \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF \
@@ -98,57 +124,23 @@ jobs:
           mkdir -p $HOME/libressl-wasm/lib
           cp crypto/libcrypto.a $HOME/libressl-wasm/lib/
 
-      - name: Compile SQLCipher to WASM
+      - name: Build WASM
         run: |
-          mkdir -p wasm/dist
-          cp sqlite3.c wasm/dist/
-          cp sqlite3.h wasm/dist/
-          cp wasm/sqlcipher_wasm.c wasm/dist/
-          cp wasm/opfs_vfs.c wasm/dist/
-
-          EXPORTED='["_wasm_db_open","_wasm_db_close","_wasm_db_exec","_wasm_db_errmsg","_wasm_db_changes","_wasm_db_total_changes","_wasm_db_key","_wasm_db_prepare","_wasm_stmt_finalize","_wasm_stmt_reset","_wasm_stmt_clear_bindings","_wasm_stmt_step","_wasm_stmt_bind_text","_wasm_stmt_bind_int","_wasm_stmt_bind_double","_wasm_stmt_bind_null","_wasm_stmt_bind_parameter_count","_wasm_stmt_columns","_wasm_stmt_colname","_wasm_stmt_coltype","_wasm_stmt_int","_wasm_stmt_double","_wasm_stmt_text","_sqlite3_opfs_init","_malloc","_free"]'
-          RUNTIME='["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
-
-          cd wasm/dist
-          emcc sqlcipher_wasm.c opfs_vfs.c \
-            -I. -I$HOME/libressl/include \
-            -L$HOME/libressl-wasm/lib \
-            -O2 \
-            -DSQLITE_HAS_CODEC \
-            -DSQLCIPHER_CRYPTO_OPENSSL \
-            -DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
-            -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown \
-            -DSQLITE_OMIT_LOAD_EXTENSION \
-            -DSQLITE_THREADSAFE=1 \
-            -DSQLITE_TEMP_STORE=2 \
-            -DSQLITE_ENABLE_FTS5 \
-            -DSQLITE_ENABLE_JSON1 \
-            -s WASM=1 \
-            -s EXPORTED_FUNCTIONS="$EXPORTED" \
-            -s EXPORTED_RUNTIME_METHODS="$RUNTIME" \
-            -s ALLOW_MEMORY_GROWTH=1 \
-            -s INITIAL_MEMORY=16777216 \
-            -s MODULARIZE=1 \
-            -s EXPORT_NAME="initSqlcipher" \
-            -s ENVIRONMENT='web,worker,node' \
-            -s FILESYSTEM=1 \
-            $HOME/libressl-wasm/lib/libcrypto.a \
-            -o sqlcipher.js
-
-          rm -f sqlite3.c sqlite3.h sqlcipher_wasm.c opfs_vfs.c
-          ls -lh sqlcipher.js sqlcipher.wasm
+          LIBRESSL_NATIVE=$HOME/libressl \
+          LIBRESSL_WASM=$HOME/libressl-wasm \
+          ./build-sqlcipher-libressl.sh
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - name: Prepare WASM test directory
         run: |
           cp wasm/dist/sqlcipher.js tests/wasm/
           cp wasm/dist/sqlcipher.wasm tests/wasm/
-          cp wasm/sqlcipher-api.js tests/wasm/
-          cp wasm/sqlcipher-worker.js tests/wasm/
+          cp wasm/dist/sqlcipher-api.js tests/wasm/
+          cp wasm/dist/sqlcipher-worker.js tests/wasm/
 
       - name: Install Playwright
         run: |
@@ -178,9 +170,9 @@ jobs:
             wasm/dist/sqlcipher.js
             wasm/dist/sqlcipher.wasm
             wasm/dist/sqlcipher-wasm-static.tar.gz
-            wasm/sqlcipher-api.js
-            wasm/sqlcipher-oo1.js
-            wasm/sqlcipher-worker.js
+            wasm/dist/sqlcipher-api.js
+            wasm/dist/sqlcipher-oo1.js
+            wasm/dist/sqlcipher-worker.js
           retention-days: 90
 
   release:
@@ -192,70 +184,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download WASM artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: sqlcipher-wasm
-          path: release
+          path: artifacts
+          merge-multiple: true
 
       - name: Prepare release files
         run: |
           mkdir -p dist
-          find release -type f \( -name '*.js' -o -name '*.wasm' -o -name '*.tar.gz' \) | while read f; do cp "$f" dist/; done
+          find artifacts -type f | while read f; do cp "$f" dist/; done
           ls -lh dist/
 
       - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create ${{ github.ref_name }} \
-            dist/sqlcipher.js \
-            dist/sqlcipher.wasm \
-            dist/sqlcipher-api.js \
-            dist/sqlcipher-oo1.js \
-            dist/sqlcipher-worker.js \
-            dist/sqlcipher-wasm-static.tar.gz \
-            --title "SQLCipher WASM ${{ github.ref_name }}" \
-            --notes "$(cat <<'NOTES'
-          Encrypted SQLite in the browser — SQLCipher + LibreSSL, compiled to WASM.
-
-          ## Files
-
-          | File | Description |
-          |------|-------------|
-          | `sqlcipher.js` | Emscripten glue (~94KB) |
-          | `sqlcipher.wasm` | Compiled binary (~1.4MB) |
-          | `sqlcipher-api.js` | Unified API — auto-detects OPFS / IndexedDB |
-          | `sqlcipher-oo1.js` | oo1 API shim (main thread, IndexedDB fallback) |
-          | `sqlcipher-worker.js` | Web Worker — OPFS or IndexedDB page cache |
-          | `sqlcipher-wasm-static.tar.gz` | Static libs for custom WASM builds |
-
-          ### Static libs (`sqlcipher-wasm-static.tar.gz`)
-
-          For custom WASM builds — contains:
-          - `sqlite3.c`, `sqlite3.h` — SQLCipher amalgamation (patched)
-          - `sqlcipher_wasm.c`, `opfs_vfs.c` — WASM/VFS helpers
-          - `libcrypto-wasm.a` — LibreSSL libcrypto compiled for WASM (Emscripten)
-          - `openssl/` — LibreSSL headers
-
-          ## Quick start (unified API)
-
-          ```html
-          <script src="sqlcipher.js"></script>
-          <script src="sqlcipher-api.js"></script>
-          <script>
-          (async function() {
-            var db = await SQLCipher.open({filename: "app.db", key: "secret"});
-            console.log("Backend:", db.mode); // "opfs" or "indexeddb"
-            await db.exec("CREATE TABLE IF NOT EXISTS t (x TEXT)");
-            await db.exec("INSERT INTO t VALUES (?)", ["hello"]);
-            var rows = await db.select("SELECT * FROM t");
-            // data is durable — auto-flushed on every exec
-            await db.close();
-          })();
-          </script>
-          ```
-
-          See [docs/oo1-api.md](docs/oo1-api.md) for the full API reference.
-          NOTES
-          )"
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.js
+            dist/*.wasm
+            dist/*.tar.gz
+            dist/*.a
