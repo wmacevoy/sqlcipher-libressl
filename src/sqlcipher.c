@@ -96,7 +96,7 @@ void sqlite3pager_reset(Pager *pPager);
 #define CIPHER_STR(s) #s
 
 #ifndef CIPHER_VERSION_NUMBER
-#define CIPHER_VERSION_NUMBER 4.14.0
+#define CIPHER_VERSION_NUMBER 4.16.0
 #endif
 
 #ifndef CIPHER_VERSION_BUILD
@@ -124,7 +124,7 @@ void sqlite3pager_reset(Pager *pPager);
 
 
 #ifndef DEFAULT_CIPHER_FLAGS
-#define DEFAULT_CIPHER_FLAGS CIPHER_FLAG_HMAC | CIPHER_FLAG_LE_PGNO
+#define DEFAULT_CIPHER_FLAGS (CIPHER_FLAG_HMAC | CIPHER_FLAG_LE_PGNO)
 #endif
 
 
@@ -349,7 +349,7 @@ static void cipher_hex2bin(const unsigned char *hex, int sz, unsigned char *out)
 static void cipher_bin2hex(const unsigned char* in, int sz, char *out) {
     int i;
     for(i=0; i < sz; i++) {
-      sqlite3_snprintf(3, out + (i*2), "%02x ", in[i]);
+      sqlite3_snprintf(3, out + (i*2), "%02x", in[i]);
     } 
 }
 
@@ -418,7 +418,7 @@ static void sqlcipher_fini(void) {
 
 static void sqlcipher_exportFunc(sqlite3_context*, int, sqlite3_value**);
 
-static int sqlcipher_export_init(sqlite3* db, const char** errmsg, const struct sqlite3_api_routines* api) { 
+static int sqlcipher_export_init(sqlite3* db, char** errmsg, const struct sqlite3_api_routines* api) { 
   sqlite3_create_function_v2(db, "sqlcipher_export", -1, SQLITE_UTF8, 0, sqlcipher_exportFunc, 0, 0, 0);
   return SQLITE_OK;
 }
@@ -430,12 +430,15 @@ static int sqlcipher_export_init(sqlite3* db, const char** errmsg, const struct 
 int sqlcipher_extra_init(const char* arg) {
   int rc = SQLITE_OK, i=0;
   void* provider_ctx = NULL;
+  int mutex_held = 0;
 
   sqlite3_mutex_enter(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
+  mutex_held = 1;
 
   if(sqlcipher_init) {
     /* if this init routine already completed successfully return immediately */
     sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
+    mutex_held = 0;
     return SQLITE_OK;
   }
 
@@ -555,12 +558,14 @@ int sqlcipher_extra_init(const char* arg) {
   }
 
   default_provider->ctx_free(&provider_ctx);
+  provider_ctx = NULL;
 
   sqlcipher_init = 1;
   sqlcipher_shutdown = 0;
 
   /* leave the master mutex so we can proceed with auto extension registration */
   sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
+  mutex_held = 0;
 
   /* finally, extension registration occurs outside of the mutex because it is
    * uses SQLITE_MUTEX_STATIC_MASTER itself */
@@ -584,9 +589,10 @@ error:
       sqlcipher_static_mutex[i] = NULL;
     }
   }
+  if(provider_ctx) default_provider->ctx_free(&provider_ctx);
 
   /* post cleanup return the error code back up to sqlite3_init() */
-  sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
+  if(mutex_held) sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
   sqlcipher_init_error = rc;
   return rc;
 }
@@ -735,7 +741,6 @@ static void sqlcipher_mlock(void *ptr, sqlite_uint64 sz) {
   sqlcipher_log(SQLCIPHER_LOG_TRACE, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: calling mlock(%p,%lu); _SC_PAGESIZE=%lu", ptr - offset, sz + offset, pagesize);
   rc = mlock(ptr - offset, sz + offset);
   if(rc!=0) {
-    sqlcipher_log(SQLCIPHER_LOG_WARN, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: mlock() returned %d errno=%d", rc, errno);
     sqlcipher_log(SQLCIPHER_LOG_INFO, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: mlock(%p,%lu) returned %d errno=%d", ptr - offset, sz + offset, rc, errno);
   }
 #elif defined(_WIN32)
@@ -744,7 +749,6 @@ static void sqlcipher_mlock(void *ptr, sqlite_uint64 sz) {
   sqlcipher_log(SQLCIPHER_LOG_TRACE, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: calling VirtualLock(%p,%d)", ptr, sz);
   rc = VirtualLock(ptr, sz);
   if(rc==0) {
-    sqlcipher_log(SQLCIPHER_LOG_WARN, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: VirtualLock() returned %d LastError=%d", rc, GetLastError());
     sqlcipher_log(SQLCIPHER_LOG_INFO, SQLCIPHER_LOG_MEMORY, "sqlcipher_mlock: VirtualLock(%p,%d) returned %d LastError=%d", ptr, sz, rc, GetLastError());
   }
 #endif
@@ -2070,7 +2074,7 @@ migrate:
   memcpy(migrated_db_filename, temp, sqlite3Strlen30(temp));
   sqlcipher_free(temp, sqlite3Strlen30(temp));
 
-  attach_command = sqlite3_mprintf("ATTACH DATABASE '%s' as migrate;", migrated_db_filename, pass); 
+  attach_command = sqlite3_mprintf("ATTACH DATABASE '%s' as migrate;", migrated_db_filename); 
   set_user_version = sqlite3_mprintf("PRAGMA migrate.user_version = %d;", user_version);
 
   rc = sqlite3_exec(db, pragma_compat, NULL, NULL, NULL);
@@ -3756,7 +3760,7 @@ static int sqlcipher_execExecSql(sqlite3 *db, char **pzErrMsg, const char *zSql)
 static void sqlcipher_exportFunc(sqlite3_context *context, int argc, sqlite3_value **argv) {
   sqlite3 *db = sqlite3_context_db_handle(context);
   const char* targetDb, *sourceDb; 
-  int targetDb_idx = 0;
+  int targetDb_idx = 0, sourceDb_idx = 0;
   u64 saved_flags = db->flags;        /* Saved value of the db->flags */
   u32 saved_mDbFlags = db->mDbFlags;        /* Saved value of the db->mDbFlags */
   int saved_nChange = db->nChange;      /* Saved value of db->nChange */
@@ -3790,12 +3794,19 @@ static void sqlcipher_exportFunc(sqlite3_context *context, int argc, sqlite3_val
     sourceDb = (char *) sqlite3_value_text(argv[1]);
   }
 
+  /* if the source database is not valid, do not proceed. */
+  sourceDb_idx =  sqlcipher_find_db_index(db, sourceDb);
+  if(sourceDb_idx < 0) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf("invalid source database %s", sourceDb);
+    goto end_of_export;
+  }
 
   /* if the target database is not valid, do not proceed. */
   targetDb_idx =  sqlcipher_find_db_index(db, targetDb);
   if(targetDb_idx < 0) {
     rc = SQLITE_ERROR;
-    pzErrMsg = sqlite3_mprintf("unknown database %s", targetDb);
+    pzErrMsg = sqlite3_mprintf("invalid target database %s", targetDb);
     goto end_of_export;
   }
   db->init.iDb = targetDb_idx;

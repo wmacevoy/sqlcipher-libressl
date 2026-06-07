@@ -1,7 +1,20 @@
 # SQLCipher Change Log
 Notable changes to this project are documented in this file.
 
-## [4.14.0] - (? 2026 - [4.14.0 changes])
+## [4.16.0] - (? 2026 - [4.16.0 changes])
+- Update baseline to SQLite 3.53.1
+- Allocate LTC temp variables on stack
+- Omit extra warn-level log on lock failure
+
+## [4.15.0] - (April 2026 - [4.15.0 changes])
+- Update baseline to SQLite 3.53.0
+- Sanitize source database name passed to `sqlcipher_export` (reported by
+  Dima Petschke from Deutsche Telekom Security GmbH)
+- Improve error handling in `sqlcipher_extra_init`
+- Remove const from pzErrMesg in `sqlcipher_export_init` (issue #590)
+- Minor code cleanups
+
+## [4.14.0] - (March 2026 - [4.14.0 changes])
 - Updates baseline to SQLite 3.51.3
 - Restores and improves upon LibTomCrypto provder
 - Minor test improvements
@@ -327,6 +340,10 @@ Notable changes to this project are documented in this file.
 ### Security
 - Change KDF iteration length from 4,000 to 64,000
 
+[4.16.0]: https://github.com/sqlcipher/sqlcipher/tree/v4.16.0
+[4.16.0 changes]: https://github.com/sqlcipher/sqlcipher/compare/v4.15.0...v4.16.0
+[4.15.0]: https://github.com/sqlcipher/sqlcipher/tree/v4.15.0
+[4.15.0 changes]: https://github.com/sqlcipher/sqlcipher/compare/v4.14.0...v4.15.0
 [4.14.0]: https://github.com/sqlcipher/sqlcipher/tree/v4.14.0
 [4.14.0 changes]: https://github.com/sqlcipher/sqlcipher/compare/v4.13.0...v4.14.0
 [4.13.0]: https://github.com/sqlcipher/sqlcipher/tree/v4.13.0
