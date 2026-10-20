@@ -133,6 +133,28 @@ int main(void) {
     sqlite3_free(err);
     sqlite3_close(db);
 
+    /* ── 5. No key at all — a plain SQLite file ──────────── */
+
+    printf("REQ2/ENC-2 5. Creating a database WITHOUT key (must be plain SQLite)...\n");
+    const char *plainfile = "/tmp/sqlcipher_example_plain.db";
+    unlink(plainfile);
+    rc = sqlite3_open(plainfile, &db);
+    check(rc, db, "open-plain");
+    exec(db, "CREATE TABLE t (x TEXT)");
+    exec(db, "INSERT INTO t VALUES ('plain')");
+    sqlite3_close(db);
+
+    char header[16] = {0};
+    FILE *f = fopen(plainfile, "rb");
+    size_t got = f ? fread(header, 1, sizeof header, f) : 0;
+    if (f) fclose(f);
+    unlink(plainfile);
+    if (got != sizeof header || memcmp(header, "SQLite format 3", 16) != 0) {
+        fprintf(stderr, "FAIL: a database created without a key is not a plain SQLite file\n");
+        return 1;
+    }
+    printf("   File begins \"SQLite format 3\\0\" — unencrypted, as in SQLCipher.\n");
+
     /* ── Done ─────────────────────────────────────────────── */
 
     unlink(dbfile);
