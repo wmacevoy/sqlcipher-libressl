@@ -42,14 +42,14 @@
 
   // ── Tests ──────────────────────────────────────────────────
 
-  await test("open and close", async function() {
+  await test("REQ1/API-1 open and close", async function() {
     var db = await SQLCipher.open({filename: "/t1.db", key: "k1"});
     assert(db.mode === "opfs" || db.mode === "indexeddb", "bad mode: " + db.mode);
     assertEqual(db.filename, "/t1.db", "filename");
     await db.close();
   });
 
-  await test("exec and select with bind params", async function() {
+  await test("REQ1/API-1 exec and select with bind params", async function() {
     var db = await SQLCipher.open({filename: "/t2.db", key: "k2"});
     await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val REAL)");
     await db.exec("INSERT INTO t VALUES (?, ?, ?)", [1, "alice", 3.14]);
@@ -64,7 +64,7 @@
     await db.close();
   });
 
-  await test("changes count", async function() {
+  await test("REQ1/API-1 changes count", async function() {
     var db = await SQLCipher.open({filename: "/t3.db", key: "k3"});
     await db.exec("CREATE TABLE t (x INTEGER)");
     var r1 = await db.exec("INSERT INTO t VALUES (1)");
@@ -76,7 +76,7 @@
     await db.close();
   });
 
-  await test("flush", async function() {
+  await test("REQ1/API-1 flush", async function() {
     var db = await SQLCipher.open({filename: "/t4.db", key: "k4"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('flushed')");
@@ -84,7 +84,7 @@
     await db.close();
   });
 
-  await test("export returns Uint8Array", async function() {
+  await test("REQ1/EXP-1 export returns Uint8Array", async function() {
     var db = await SQLCipher.open({filename: "/t5.db", key: "k5"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('exported')");
@@ -94,7 +94,7 @@
     await db.close();
   });
 
-  await test("import restores from blob", async function() {
+  await test("REQ1/EXP-1 import restores from blob", async function() {
     var db = await SQLCipher.open({filename: "/t6.db", key: "k6"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('original')");
@@ -110,7 +110,7 @@
     await db.close();
   });
 
-  await test("shred", async function() {
+  await test("REQ1/SHR-1 shred", async function() {
     var db = await SQLCipher.open({filename: "/t7.db", key: "k7"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('secret')");
@@ -123,7 +123,7 @@
     await db2.close();
   });
 
-  await test("persistence across close and reopen", async function() {
+  await test("REQ1/DUR-1 persistence across close and reopen", async function() {
     var db = await SQLCipher.open({filename: "/t8.db", key: "k8"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('persisted')");
@@ -136,7 +136,7 @@
     await db2.close();
   });
 
-  await test("wrong key rejection", async function() {
+  await test("REQ1/ENC-1 wrong key rejection", async function() {
     var db = await SQLCipher.open({filename: "/t9.db", key: "correctkey"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('secret')");
@@ -153,7 +153,7 @@
     try { await db2.close(); } catch(e) {}
   });
 
-  await test("shredOnClose", async function() {
+  await test("REQ1/SHR-1 shredOnClose", async function() {
     var db = await SQLCipher.open({filename: "/t10.db", key: "k10"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('doomed')");
@@ -169,7 +169,7 @@
 
   // Written by official SQLCipher 4.0 (OpenSSL); same file and expectations
   // as upstream's compat-open-4.0-database, but through the WASM LibreSSL.
-  await test("upstream compat: opens SQLCipher 4.0 database", async function() {
+  await test("REQ1/FMT-1 upstream compat: opens SQLCipher 4.0 database", async function() {
     var resp = await fetch("sqlcipher-4.0-testkey.db");
     assert(resp.ok, "fixture fetch: HTTP " + resp.status);
     var bytes = new Uint8Array(await resp.arrayBuffer());

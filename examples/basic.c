@@ -54,7 +54,7 @@ int main(void) {
 
     /* ── 1. Create encrypted database ─────────────────────── */
 
-    printf("1. Creating encrypted database...\n");
+    printf("REQ1/ENC-1 1. Creating encrypted database...\n");
     rc = sqlite3_open(dbfile, &db);
     check(rc, db, "open");
 
@@ -71,7 +71,7 @@ int main(void) {
 
     /* ── 2. Reopen with correct key — data intact ─────────── */
 
-    printf("2. Reopening with correct key...\n");
+    printf("REQ1/ENC-1 2. Reopening with correct key...\n");
     rc = sqlite3_open(dbfile, &db);
     check(rc, db, "reopen");
 
@@ -98,7 +98,7 @@ int main(void) {
 
     /* ── 3. Try without key — must fail ───────────────────── */
 
-    printf("3. Reopening WITHOUT key (must fail)...\n");
+    printf("REQ1/ENC-1 3. Reopening WITHOUT key (must fail)...\n");
     rc = sqlite3_open(dbfile, &db);
     check(rc, db, "open-nokey");
 
@@ -116,7 +116,7 @@ int main(void) {
 
     /* ── 4. Try with wrong key — must fail ────────────────── */
 
-    printf("4. Reopening with WRONG key (must fail)...\n");
+    printf("REQ1/ENC-1 4. Reopening with WRONG key (must fail)...\n");
     rc = sqlite3_open(dbfile, &db);
     check(rc, db, "open-wrongkey");
 
