@@ -614,7 +614,9 @@ page cache.  Both are durable per statement (auto-flush on every exec).
 | `key` | — | Encryption passphrase. |
 | `workerUrl` | `"sqlcipher-worker.js"` | Path to the Worker script. |
 
-Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
+Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.  If the
+worker's `init` or `open` fails, the promise rejects with its error and the
+worker is terminated.
 
 #### Handle methods
 
