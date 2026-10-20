@@ -91,6 +91,9 @@ The worker opens every database in `locking_mode=EXCLUSIVE` and `journal_mode=WA
 the headers SQLite would write in the clear (page numbers, commit sizes, salts), keyed from
 SQLCipher's derived key. On IndexedDB the WAL stays in worker memory and only committed,
 checkpointed states are stored. `export()` checkpoints first, so it returns the whole database.
+`PRAGMA rekey` through `exec` keeps every commit: the worker checkpoints before and after it, and
+the WAL that follows is sealed under the new key. A key pragma inside a transaction, or after an
+`open` whose key could not read the database, is refused with `not authorized`.
 
 ### Worker message protocol
 

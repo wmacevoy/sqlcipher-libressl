@@ -308,6 +308,7 @@ async function init() {
     errmsg:     Module.cwrap("wasm_db_errmsg",          "string",  ["number"]),
     errcode:    Module.cwrap("wasm_db_errcode",         "number",  ["number"]),
     walseal_key: Module.cwrap("wasm_db_walseal_key",    "number",  ["number"]),
+    walseal_settle: Module.cwrap("wasm_db_walseal_settle", "number", ["number"]),
     keep_wal:   Module.cwrap("wasm_db_keep_wal",        "number",  ["number"]),
     changes:    Module.cwrap("wasm_db_changes",         "number",  ["number"]),
     key:        Module.cwrap("wasm_db_key",             "number",  ["number", "string"]),
@@ -426,6 +427,15 @@ async function _checkpoint_and_flush() {
   if (!h || h.type !== "idb") return;
   await _pageStore.flush(_currentFilename, h.buf, h.dirty);
   h.dirty.clear();
+}
+
+/** After a statement that changed the key (PRAGMA rekey, or key): checkpoint,
+    so the database file is under the new key too and the old key opens
+    nothing (REQ1/DUR-2, REQ6/ENC-3). Returns true if it did. */
+function _settleKey() {
+  var r = _api.walseal_settle(_dbPtr);
+  if (r < 0) throw new Error(_api.errmsg(_dbPtr));
+  return r === 1;
 }
 
 /** n random bytes. getRandomValues fills at most 65536 bytes per call. */
@@ -581,18 +591,22 @@ async function handleMessage(msg) {
       }
 
       case "exec": {
-        if (msg.bind) {
-          var stmt = _api.prepare(_dbPtr, msg.sql);
-          if (!stmt) throw new Error(_api.errmsg(_dbPtr));
-          try {
-            _bind(stmt, msg.bind);
-            while (_step(stmt)) {}
-          } finally {
-            _api.finalize(stmt);
+        try {
+          if (msg.bind) {
+            var stmt = _api.prepare(_dbPtr, msg.sql);
+            if (!stmt) throw new Error(_api.errmsg(_dbPtr));
+            try {
+              _bind(stmt, msg.bind);
+              while (_step(stmt)) {}
+            } finally {
+              _api.finalize(stmt);
+            }
+          } else {
+            var rc = _api.exec(_dbPtr, msg.sql);
+            if (rc !== 0) throw new Error(_api.errmsg(_dbPtr));
           }
-        } else {
-          var rc = _api.exec(_dbPtr, msg.sql);
-          if (rc !== 0) throw new Error(_api.errmsg(_dbPtr));
+        } finally {
+          _settleKey();    // a key change commits even if a later statement fails
         }
         // Auto-persist: flush dirty pages (IndexedDB). OPFS is already
         // durable via xSync — this is a no-op for OPFS.
@@ -602,7 +616,12 @@ async function handleMessage(msg) {
       }
 
       case "select": {
-        var result = _query(msg.sql, msg.bind);
+        var result;
+        try {
+          result = _query(msg.sql, msg.bind);
+        } finally {
+          if (_settleKey()) await _checkpoint_and_flush();
+        }
         postMessage({id: id, ok: true, rows: result.rows, names: result.names});
         break;
       }

@@ -28,7 +28,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 | `wasm/sqlcipher_wasm.c` | C helpers for the JS↔WASM boundary |
 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker (`EM_JS`) |
 | `wasm/walseal.c`, `walseal.h` | VFS shim over it: enciphers the `-wal` file's headers (from `sqlcipher-embedded`, ported to LibreSSL) |
-| `wasm/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key; `#include`d after `sqlite3.c` |
+| `wasm/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key, kept on it when a statement changes the key; `#include`d after `sqlite3.c` |
 | `wasm/sqlcipher-api.js` | unified API |
 | `wasm/sqlcipher-worker.js` | Web Worker: OPFS or IndexedDB backend |
 | `wasm/sqlcipher-oo1.js` | oo1 shim (main thread, IndexedDB blob) |
