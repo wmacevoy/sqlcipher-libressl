@@ -74,6 +74,9 @@ python3 -m http.server 8000
 | `db.close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Shreds if flagged. |
 | `db.mode` | `string` | `"opfs"` or `"indexeddb"` |
 
+Bind values: numbers, strings, booleans, `null`, and `Uint8Array` (stored as a BLOB).
+BLOB columns read back as `Uint8Array`.
+
 ### Persistence
 
 | | OPFS (auto, preferred) | IndexedDB page cache (auto, fallback) |

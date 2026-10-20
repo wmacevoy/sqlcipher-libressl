@@ -44,13 +44,16 @@ function DB(Module, opts) {
     bind_int:         Module.cwrap("wasm_stmt_bind_int",            null,      ["number", "number", "number"]),
     bind_double:      Module.cwrap("wasm_stmt_bind_double",         null,      ["number", "number", "number"]),
     bind_null:        Module.cwrap("wasm_stmt_bind_null",           null,      ["number", "number"]),
+    bind_blob:        Module.cwrap("wasm_stmt_bind_blob",           null,      ["number", "number", "number", "number"]),
     bind_param_count: Module.cwrap("wasm_stmt_bind_parameter_count","number",  ["number"]),
     columns:          Module.cwrap("wasm_stmt_columns",             "number",  ["number"]),
     colname:          Module.cwrap("wasm_stmt_colname",             "string",  ["number", "number"]),
     coltype:          Module.cwrap("wasm_stmt_coltype",             "number",  ["number", "number"]),
     col_int:          Module.cwrap("wasm_stmt_int",                 "number",  ["number", "number"]),
     col_double:       Module.cwrap("wasm_stmt_double",              "number",  ["number", "number"]),
-    col_text:         Module.cwrap("wasm_stmt_text",                "string",  ["number", "number"])
+    col_text:         Module.cwrap("wasm_stmt_text",                "string",  ["number", "number"]),
+    col_blob:         Module.cwrap("wasm_stmt_blob",                "number",  ["number", "number"]),
+    col_bytes:        Module.cwrap("wasm_stmt_bytes",               "number",  ["number", "number"])
   };
 
   var _Module = Module;
@@ -329,10 +332,38 @@ function DB(Module, opts) {
       }
     } else if (typeof v === "boolean") {
       _api.bind_int(ptr, idx, v ? 1 : 0);
+    } else if (v instanceof Uint8Array) {
+      _bindBlob(ptr, idx, v);
     } else {
       _api.bind_text(ptr, idx, String(v));
     }
   }
+
+  function _bindBlob(ptr, idx, bytes) {
+    // The C helper binds SQLITE_TRANSIENT (SQLite copies), so the buffer is freed at once.
+    var p = bytes.length ? _Module._malloc(bytes.length) : 0;
+    if (p) _Module.HEAPU8.set(bytes, p);
+    _api.bind_blob(ptr, idx, p, bytes.length);
+    if (p) _Module._free(p);
+  }
+
+  // bindAsBlob(value) — index 1;  bindAsBlob(ndx, value)
+  // A string binds as its UTF-8 bytes; a typed array as its bytes.
+  Stmt.prototype.bindAsBlob = function(ndxOrValue, value) {
+    this.affirmNotFinalized();
+    var idx = arguments.length === 2 ? ndxOrValue : 1;
+    var v = arguments.length === 2 ? value : ndxOrValue;
+    if (v === null || v === undefined) {
+      _api.bind_null(this.pointer, idx);
+    } else if (typeof v === "string") {
+      _bindBlob(this.pointer, idx, new TextEncoder().encode(v));
+    } else if (ArrayBuffer.isView(v)) {
+      _bindBlob(this.pointer, idx, new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    } else {
+      throw new Error("bindAsBlob: expected a string, null, or a typed array");
+    }
+    return this;
+  };
 
   // ── step / reset / finalize ────────────────────────────────
 
@@ -415,6 +446,12 @@ function DB(Module, opts) {
     return _api.col_text(this.pointer, ndx);
   };
 
+  Stmt.prototype.getBlob = function(ndx) {
+    this.affirmNotFinalized();
+    if (_api.coltype(this.pointer, ndx) === 5) return null;   // NULL
+    return _readBlob(this.pointer, ndx);
+  };
+
   Stmt.prototype.getColumnName = function(ndx) {
     this.affirmNotFinalized();
     return _api.colname(this.pointer, ndx);
@@ -434,7 +471,13 @@ function DB(Module, opts) {
     if (type === 1) return _api.col_int(ptr, c);    // INTEGER
     if (type === 2) return _api.col_double(ptr, c);  // FLOAT
     if (type === 3) return _api.col_text(ptr, c);    // TEXT
-    return null;                                      // NULL or BLOB
+    if (type === 4) return _readBlob(ptr, c);        // BLOB
+    return null;                                      // NULL
+  }
+
+  function _readBlob(ptr, c) {
+    var p = _api.col_blob(ptr, c), n = _api.col_bytes(ptr, c);
+    return _Module.HEAPU8.slice(p, p + n);
   }
 
   // ── Persistence ─────────────────────────────────────────────

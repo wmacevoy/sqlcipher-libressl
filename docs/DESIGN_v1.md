@@ -113,8 +113,6 @@ write first.
   anything else, error included; the worker loops until 0 and resolves `ok`. A constraint violation
   succeeds silently (contradicts REQ1/ERR-1). `select` likewise returns the rows read before an
   error.
-- **No BLOBs yet.** Binding a `Uint8Array` stores its text; reading a BLOB column gives `null`
-  (contradicts REQ2/API-2).
 - **A failed flush leaves memory ahead of storage.** The statement has already applied in the
   worker; the promise rejects; nothing rolls the memory copy back.
 
