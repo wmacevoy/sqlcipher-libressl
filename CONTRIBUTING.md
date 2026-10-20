@@ -86,16 +86,16 @@ cd test && ../testfixture sqlcipher.test     # ends "0 errors out of 208 tests"
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    wasm/dist/sqlcipher-worker.js wasm/dist/sqlcipher-oo1.js \
    sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
-(cd tests/wasm && npm init -y >/dev/null && npm install playwright && npx playwright install chromium)
-node tests/wasm/run-tests.mjs                # ends "Result: 2/2 backends passed -- PASS"
+(cd tests/wasm && npm init -y >/dev/null && npm install playwright && npx playwright install chromium firefox webkit)
+node tests/wasm/run-tests.mjs                # ends "Result: 6/6 browser/backend runs passed -- PASS"
 ```
 
 On macOS with Tcl from conda or Homebrew, `testfixture` may need
 `DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
 
 CI (`.github/workflows/build-test.yml`) builds and smoke-tests on all four platforms, runs
-upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium,
-once per backend (`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it publishes the release
+upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium, Firefox and WebKit,
+once per backend in each (`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it publishes the release
 (`.a` per platform, the WASM files, the JS helpers, `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
 `gh workflow run build-test.yml --repo wmacevoy/sqlcipher-libressl --ref <branch>`.
 
