@@ -608,6 +608,34 @@
     await db.close();
   });
 
+  // The probe worker (shred-probe-worker.js) posts a file's bytes just before the
+  // worker deletes it, so the test can see what shred() left in storage.
+  await test("REQ1/SHR-1 shred overwrites the stored file before deleting it", async function() {
+    var probe = new BroadcastChannel("shred-probe");
+    var reported = new Promise(function(resolve, reject) {
+      probe.onmessage = function(e) { if (/t16\.db$/.test(e.data.name)) resolve(e.data); };
+      setTimeout(function() { reject(new Error("no probe report within 10 s")); }, 10000);
+    });
+    try {
+      var db = await SQLCipher.open({filename: "/t16.db", key: "k16", workerUrl: "shred-probe-worker.js"});
+      await db.exec("CREATE TABLE t (x BLOB)");
+      await db.exec("INSERT INTO t VALUES (?)", [ALL_BYTES]);
+      await db.exec("INSERT INTO t VALUES (zeroblob(20000))");
+      var stored = await db.export();
+      await db.shred();
+      var r = await reported;
+      assert(!r.error, "probe could not read the file: " + r.error);
+      assertEqual(r.bytes.length, stored.length, r.backend + ": length of what was deleted");
+      var same = 0;
+      for (var i = 0; i < stored.length; i++) if (r.bytes[i] === stored[i]) same++;
+      // Random bytes match the old ones at about 1 in 256 positions; the file left as it was matches at all.
+      assert(same < stored.length / 20, r.backend + ": " + same + " of " + stored.length +
+             " bytes unchanged before delete");
+    } finally {
+      probe.close();
+    }
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
