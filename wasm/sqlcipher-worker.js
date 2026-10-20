@@ -428,6 +428,13 @@ async function _checkpoint_and_flush() {
   h.dirty.clear();
 }
 
+/** n random bytes. getRandomValues fills at most 65536 bytes per call. */
+function _randomBytes(n) {
+  var out = new Uint8Array(n);
+  for (var i = 0; i < n; i += 65536) crypto.getRandomValues(out.subarray(i, Math.min(i + 65536, n)));
+  return out;
+}
+
 /** Overwrite all stored data with random bytes, close DB, delete file. */
 async function _shred() {
   var sfn = _currentFilename;
@@ -450,8 +457,7 @@ async function _shred() {
   if (_dbPtr) { _api.keep_wal(_dbPtr); _api.close(_dbPtr); _dbPtr = 0; }
 
   if (wh && wh.type === "opfs") {
-    var wrnd = new Uint8Array(wh.sah.getSize());
-    crypto.getRandomValues(wrnd);
+    var wrnd = _randomBytes(wh.sah.getSize());
     wh.sah.write(wrnd, {at: 0});
     wh.sah.flush();
   }
@@ -469,8 +475,7 @@ async function _shred() {
       var loc = await _getDir(sfn);
       var fh = await loc.dir.getFileHandle(loc.filename, {create: false});
       var sah = await fh.createSyncAccessHandle();
-      var rnd = new Uint8Array(fileSize);
-      crypto.getRandomValues(rnd);
+      var rnd = _randomBytes(fileSize);
       sah.write(rnd, {at: 0});
       sah.flush();
       sah.close();
@@ -481,8 +486,7 @@ async function _shred() {
     var numBlocks = Math.ceil(fileSize / _pageStore.BLOCK);
     var allDirty = new Set();
     for (var bi = 0; bi < numBlocks; bi++) allDirty.add(bi);
-    var rndBuf = new Uint8Array(fileSize);
-    crypto.getRandomValues(rndBuf);
+    var rndBuf = _randomBytes(fileSize);
     await _pageStore.flush(sfn, rndBuf, allDirty);
     await _pageStore.deleteFile(sfn);
   }
@@ -563,11 +567,15 @@ async function handleMessage(msg) {
           hid = _vfs.openIdb(msg.filename, bytes);
         }
         _preopen(msg.filename, hid);
-        await _preopenWal(msg.filename);
-
-        _dbPtr = _api.open(msg.filename);
-        if (msg.key) _api.key(_dbPtr, msg.key);
-        _useWal();
+        try {
+          await _preopenWal(msg.filename);
+          _dbPtr = _api.open(msg.filename);
+          if (msg.key) _api.key(_dbPtr, msg.key);
+          _useWal();
+        } catch(e) {
+          _closeDb();    // release the database's access handle too, so a retry can open it
+          throw e;
+        }
         postMessage({id: id, ok: true});
         break;
       }
