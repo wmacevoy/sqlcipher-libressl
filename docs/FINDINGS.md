@@ -4,6 +4,19 @@ What was learned the expensive way: surprises, dead ends, measurements. Blameles
 have found it, not who should have asked. Newest first. Entries before 2026-10-19 are reconstructed
 from commit messages.
 
+## 2026-10-20 — The oo1 reference documents methods the shim does not have
+
+- **What happened:** `docs/oo1-api.md` describes the official sqlite3 oo1 API, including BLOBs
+  ("Blobs are returned as `Uint8Array` instances", `getBlob`, `bindAsBlob`). The shim reads every
+  BLOB column as `null`, binds a `Uint8Array` as its text, and has neither method — nor ten
+  others the reference lists (REQUIREMENTS_v3 *Not yet answered*). Found while planning REQ2/API-2.
+- **Kind:** K3 — a reference written from the API being matched, not from the code.
+- **Cost:** none reported; any caller following the reference gets `null` or a `TypeError`.
+- **Findable by:** a check that every documented method exists (a loop over the headings, run
+  once by hand on 2026-10-20); a test per documented behavior.
+- **Changed:** REQ3/OO1-1 and its test cover the BLOB part; the other ten are a question for the
+  maintainer (QUEUE #14).
+
 ## 2026-10-20 — The macos-x64 library is an arm64 build
 
 - **What happened:** the matrix builds `libsqlcipher-macos-x64.a` on `macos-15`, which is an arm64
