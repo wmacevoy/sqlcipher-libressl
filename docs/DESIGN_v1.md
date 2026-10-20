@@ -109,6 +109,10 @@ Reasons are from the commit messages unless marked *(inferred)*
   asks for the decimal text only when the double is not a safe integer; a `BigInt` goes in as
   text. Rejected: `-s WASM_BIGINT`, which changes how every `i64` crosses `cwrap` for both the
   worker and the shim, for a case the text path already covers.
+- **The worker steps with `wasm_stmt_step_rc`** (PR #7) — REQ1/ERR-1 — `wasm_stmt_step` reports a
+  failed step as "no more rows", so `exec` with bind values resolved after a constraint violation,
+  and `select` returned the rows read before an error. `wasm_stmt_step` stays for compatibility; the
+  worker and the oo1 shim no longer call it.
 - **The oo1 shim's string `key` stays a passphrase** (PR #5, *inferred*; REQUIREMENTS_v4
   *Assumptions*) — REQ4/OO1-2 — the shim always applied it with `sqlite3_key`, as the unified API
   does. Rejected: the reference's old description (UTF-8 bytes as a raw key), under which a
@@ -126,10 +130,6 @@ write first.
   is one IndexedDB transaction after a whole `exec`, so the exposure is narrower: a transaction left
   open across `exec` calls that grows large enough to spill SQLite's cache, whose uncommitted pages
   the next flush then stores. This contradicts REQ1/DUR-2.
-- **`exec` with bind values never reports failure.** `wasm_stmt_step` returns 1 for a row and 0 for
-  anything else, error included; the worker loops until 0 and resolves `ok`. A constraint violation
-  succeeds silently (contradicts REQ1/ERR-1). `select` likewise returns the rows read before an
-  error.
 - **A failed flush leaves memory ahead of storage.** The statement has already applied in the
   worker; the promise rejects; nothing rolls the memory copy back.
 

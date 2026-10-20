@@ -306,7 +306,7 @@ async function init() {
     prepare:    Module.cwrap("wasm_db_prepare",         "number",  ["number", "string"]),
     finalize:   Module.cwrap("wasm_stmt_finalize",      null,      ["number"]),
     reset:      Module.cwrap("wasm_stmt_reset",         null,      ["number"]),
-    step:       Module.cwrap("wasm_stmt_step",          "number",  ["number"]),
+    step_rc:    Module.cwrap("wasm_stmt_step_rc",       "number",  ["number"]),
     bind_text:  Module.cwrap("wasm_stmt_bind_text",     null,      ["number", "number", "string"]),
     bind_int:   Module.cwrap("wasm_stmt_bind_int",      null,      ["number", "number", "number"]),
     bind_int64: Module.cwrap("wasm_stmt_bind_int64",    null,      ["number", "number", "number"]),
@@ -360,14 +360,30 @@ function _bindBlob(stmt, idx, bytes) {
   if (p) Module._free(p);
 }
 
+// True for a row, false when done; a failed step throws SQLite's message (REQ1/ERR-1).
+function _step(stmt) {
+  var rc = _api.step_rc(stmt);
+  if (rc === 100) return true;    // SQLITE_ROW
+  if (rc === 101) return false;   // SQLITE_DONE
+  throw new Error(_api.errmsg(_dbPtr));
+}
+
 function _query(sql, bind) {
   var stmt = _api.prepare(_dbPtr, sql);
   if (!stmt) throw new Error(_api.errmsg(_dbPtr));
+  try {
+    return _rows(stmt, bind);
+  } finally {
+    _api.finalize(stmt);
+  }
+}
+
+function _rows(stmt, bind) {
   _bind(stmt, bind);
   var cols = _api.columns(stmt);
   var names = [], rows = [];
   for (var i = 0; i < cols; i++) names.push(_api.colname(stmt, i));
-  while (_api.step(stmt)) {
+  while (_step(stmt)) {
     var row = {};
     for (var j = 0; j < cols; j++) {
       var t = _api.coltype(stmt, j);
@@ -386,7 +402,6 @@ function _query(sql, bind) {
     }
     rows.push(row);
   }
-  _api.finalize(stmt);
   return {names: names, rows: rows};
 }
 
@@ -490,9 +505,12 @@ async function handleMessage(msg) {
         if (msg.bind) {
           var stmt = _api.prepare(_dbPtr, msg.sql);
           if (!stmt) throw new Error(_api.errmsg(_dbPtr));
-          _bind(stmt, msg.bind);
-          while (_api.step(stmt)) {}
-          _api.finalize(stmt);
+          try {
+            _bind(stmt, msg.bind);
+            while (_step(stmt)) {}
+          } finally {
+            _api.finalize(stmt);
+          }
         } else {
           var rc = _api.exec(_dbPtr, msg.sql);
           if (rc !== 0) throw new Error(_api.errmsg(_dbPtr));
