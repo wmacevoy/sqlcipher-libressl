@@ -133,7 +133,7 @@ var _pageStore = {
 // ── Handle table ──────────────────────────────────────────────
 //
 // Each entry is one of:
-//   {type:"opfs", sah, name}
+//   {type:"opfs", sah, name, keep}   keep: the -wal, which outlives SQLite's xClose
 //   {type:"idb",  buf, name, dirty, blockSize}
 
 var _handles = [];
@@ -153,13 +153,13 @@ async function _getDir(path) {
 // ── VFS operations (dispatch by handle type) ──────────────────
 
 var _vfs = {
-  openOpfs: async function(name, flags) {
+  openOpfs: async function(name, flags, keep) {
     var loc = await _getDir(name);
     var create = !!(flags & 0x04);
     var fh = await loc.dir.getFileHandle(loc.filename, {create: create});
     var sah = await fh.createSyncAccessHandle();
     var hid = _handles.length;
-    _handles.push({type: "opfs", sah: sah, name: name});
+    _handles.push({type: "opfs", sah: sah, name: name, keep: !!keep});
     return hid;
   },
 
@@ -175,6 +175,9 @@ var _vfs = {
   close: function(hid) {
     var h = _handles[hid];
     if (!h) return;
+    // A kept handle stays open, so SQLite can open the file again without the
+    // asynchronous createSyncAccessHandle; _closeDb() closes it.
+    if (h.type === "opfs" && h.keep) { h.sah.flush(); return; }
     if (h.type === "opfs") { h.sah.flush(); h.sah.close(); }
     _handles[hid] = null;
   },
@@ -243,22 +246,21 @@ var _vfs = {
     return 0;
   },
 
-  deleteFile: async function(name) {
-    if (!_useOpfs) return 0;
-    try {
-      var loc = await _getDir(name);
-      await loc.dir.removeEntry(loc.filename);
-      return 0;
-    } catch(e) { return 10; }
+  // SQLite's xDelete and xAccess are synchronous; OPFS's removeEntry and
+  // getFileHandle are not. So both answer from the pre-opened handles: deleting
+  // the -wal empties it, and an empty file does not exist. Files that are not
+  // pre-opened live in memory and are gone once closed.
+  deleteFile: function(name) {
+    var hid = Module._opfs_preopen && Module._opfs_preopen[name];
+    var h = hid !== undefined ? _handles[hid] : null;
+    if (h) { _vfs.truncate(hid, 0); _vfs.sync(hid); }
+    return 0;
   },
 
-  access: async function(name) {
-    if (!_useOpfs) return 0;
-    try {
-      var loc = await _getDir(name);
-      await loc.dir.getFileHandle(loc.filename, {create: false});
-      return 1;
-    } catch(e) { return 0; }
+  access: function(name) {
+    var hid = Module._opfs_preopen && Module._opfs_preopen[name];
+    var h = hid !== undefined ? _handles[hid] : null;
+    return h && _vfs.filesize(hid) > 0 ? 1 : 0;
   }
 };
 
@@ -286,13 +288,16 @@ async function init() {
     _opfs_sync:     function(hid)              { return _vfs.sync(hid); },
     _opfs_filesize: function(hid)              { return _vfs.filesize(hid); },
     _opfs_truncate: function(hid, sz)          { return _vfs.truncate(hid, sz); },
-    _opfs_delete:   function()                 { return 0; },
-    _opfs_access:   function()                 { return 0; }
+    _opfs_delete:   function(name)             { return _vfs.deleteFile(name); },
+    _opfs_access:   function(name)             { return _vfs.access(name); }
   });
 
-  // Always allow on-demand handle creation for journal/WAL/SHM files.
-  // These are transient — memory handles are fine for both backends.
+  // Files not pre-opened get a memory handle: the rollback journal SQLite
+  // uses once, to switch a database to WAL. On OPFS the -wal must be the
+  // pre-opened file (REQ1/DUR-2), so a WAL in memory there is an error.
+  // On IndexedDB the WAL stays in memory: see _checkpoint_and_flush.
   Module._opfs_open_sync = function(name) {
+    if (_useOpfs && /-wal$/.test(name)) return -1;
     return _vfs.openIdb(name);
   };
 
@@ -301,6 +306,9 @@ async function init() {
     close:      Module.cwrap("wasm_db_close",           null,      ["number"]),
     exec:       Module.cwrap("wasm_db_exec",            "number",  ["number", "string"]),
     errmsg:     Module.cwrap("wasm_db_errmsg",          "string",  ["number"]),
+    errcode:    Module.cwrap("wasm_db_errcode",         "number",  ["number"]),
+    walseal_key: Module.cwrap("wasm_db_walseal_key",    "number",  ["number"]),
+    keep_wal:   Module.cwrap("wasm_db_keep_wal",        "number",  ["number"]),
     changes:    Module.cwrap("wasm_db_changes",         "number",  ["number"]),
     key:        Module.cwrap("wasm_db_key",             "number",  ["number", "string"]),
     prepare:    Module.cwrap("wasm_db_prepare",         "number",  ["number", "string"]),
@@ -405,7 +413,10 @@ function _rows(stmt, bind) {
   return {names: names, rows: rows};
 }
 
-/** Checkpoint WAL and flush dirty pages of the main DB to IndexedDB. */
+/** Checkpoint WAL and flush dirty pages of the main DB to IndexedDB.
+    On IndexedDB the WAL stays in memory: in WAL mode only a checkpoint writes
+    the database, and it copies committed pages only, so each flush (one
+    IndexedDB transaction) stores a committed state (REQ1/DUR-2). */
 async function _checkpoint_and_flush() {
   if (_useOpfs || !_dbPtr || !_currentFilename) return;
   _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
@@ -430,8 +441,27 @@ async function _shred() {
   if (handleType === "opfs") fileSize = sh.sah.getSize();
   else if (handleType === "idb") fileSize = sh.buf.length;
 
+  // The -wal holds the latest commits until a checkpoint; its handle outlives
+  // the close. Keep its frames through the close so the overwrite reaches them.
+  var whid = Module._opfs_preopen && Module._opfs_preopen[sfn + "-wal"];
+  var wh = whid !== undefined ? _handles[whid] : null;
+
   // Close the database (nulls handles)
-  if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+  if (_dbPtr) { _api.keep_wal(_dbPtr); _api.close(_dbPtr); _dbPtr = 0; }
+
+  if (wh && wh.type === "opfs") {
+    var wrnd = new Uint8Array(wh.sah.getSize());
+    crypto.getRandomValues(wrnd);
+    wh.sah.write(wrnd, {at: 0});
+    wh.sah.flush();
+  }
+  _closeDb();
+  if (wh && wh.type === "opfs") {
+    try {
+      var wloc = await _getDir(sfn + "-wal");
+      await wloc.dir.removeEntry(wloc.filename);
+    } catch(e) { /* already gone */ }
+  }
 
   if (handleType === "opfs") {
     // Reopen OPFS file, overwrite with random, delete
@@ -468,6 +498,45 @@ function _preopen(filename, hid) {
   Module._opfs_preopen[filename] = hid;
 }
 
+/** OPFS: pre-open the database's -wal, so SQLite finds its committed frames
+    after a crash (REQ1/DUR-2). */
+async function _preopenWal(filename) {
+  if (_useOpfs) _preopen(filename + "-wal", await _vfs.openOpfs(filename + "-wal", 0x06, true));
+}
+
+/** Close the database, then the pre-opened handles SQLite's close left open. */
+function _closeDb() {
+  if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+  var pre = Module._opfs_preopen || {};
+  Object.keys(pre).forEach(function(name) {
+    var h = _handles[pre[name]];
+    if (h && h.type === "opfs") { h.sah.flush(); h.sah.close(); }
+    _handles[pre[name]] = null;
+  });
+  Module._opfs_preopen = {};
+}
+
+/** After the key: walseal's key, then the WAL in exclusive mode (REQ1/DUR-2,
+    REQ6/ENC-3). A key that cannot read the database fails its first read
+    here; open still resolves (REQ1/ENC-1), and the WAL is kept on close. */
+function _useWal() {
+  var rc = _api.walseal_key(_dbPtr);
+  if (rc !== 0) throw new Error("walseal key: error " + rc);
+  if (_api.exec(_dbPtr, "PRAGMA locking_mode=EXCLUSIVE") !== 0) throw new Error(_api.errmsg(_dbPtr));
+  var mode;
+  try {
+    mode = _query("PRAGMA journal_mode=WAL").rows[0].journal_mode;
+  } catch(e) {
+    if (_api.errcode(_dbPtr) !== 26) throw e;     // SQLITE_NOTADB
+    _api.keep_wal(_dbPtr);
+    // After a failed read SQLCipher answers every later read "out of memory";
+    // keying again resets it, so the caller's first read fails as REQ1/ENC-1 says.
+    if (_currentKey) _api.key(_dbPtr, _currentKey);
+    return;
+  }
+  if (mode !== "wal") throw new Error("journal_mode is " + mode + ", not wal");
+}
+
 // ── Message handler ───────────────────────────────────────────
 
 async function handleMessage(msg) {
@@ -482,7 +551,7 @@ async function handleMessage(msg) {
         break;
 
       case "open": {
-        if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+        _closeDb();
         _currentFilename = msg.filename;
         _currentKey = msg.key || null;
 
@@ -494,9 +563,11 @@ async function handleMessage(msg) {
           hid = _vfs.openIdb(msg.filename, bytes);
         }
         _preopen(msg.filename, hid);
+        await _preopenWal(msg.filename);
 
         _dbPtr = _api.open(msg.filename);
         if (msg.key) _api.key(_dbPtr, msg.key);
+        _useWal();
         postMessage({id: id, ok: true});
         break;
       }
@@ -550,7 +621,7 @@ async function handleMessage(msg) {
       }
 
       case "import": {
-        if (_dbPtr) { _api.close(_dbPtr); _dbPtr = 0; }
+        _closeDb();
         var fn = msg.filename || _currentFilename;
         var raw = new Uint8Array(msg.bytes);
         var ihid;
@@ -565,10 +636,14 @@ async function handleMessage(msg) {
           ihid = _vfs.openIdb(fn, raw);
         }
         _preopen(fn, ihid);
+        // No frame of the old database may be replayed over the new one.
+        await _preopenWal(fn);
+        _vfs.deleteFile(fn + "-wal");
 
         _currentFilename = fn;
         _dbPtr = _api.open(fn);
         if (_currentKey) _api.key(_dbPtr, _currentKey);
+        _useWal();
         postMessage({id: id, ok: true});
         break;
       }
@@ -589,8 +664,7 @@ async function handleMessage(msg) {
             await _shred();
           } else {
             await _checkpoint_and_flush();
-            _api.close(_dbPtr);
-            _dbPtr = 0;
+            _closeDb();
           }
         }
         postMessage({id: id, ok: true});

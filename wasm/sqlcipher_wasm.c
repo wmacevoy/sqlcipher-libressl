@@ -13,6 +13,7 @@
  * ============================================================ */
 
 #include "sqlite3.c"
+#include "walseal_sqlcipher.c"   /* needs the amalgamation's static codec functions */
 #include <emscripten.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -279,4 +280,19 @@ int wasm_db_key(sqlite3 *db, const char *key) {
     (void)db; (void)key;
     return SQLITE_OK;
 #endif
+}
+
+/* ── The WAL (the worker) ──────────────────────────────────── */
+
+/* walseal's key from SQLCipher's derived key; with no key, the WAL passes
+   through (walseal_sqlcipher.c).  Call after wasm_db_key, before any read. */
+int wasm_db_walseal_key(sqlite3 *db) {
+    return walseal_key_from_codec(db, "main");
+}
+
+/* Close without checkpointing or deleting the WAL.  Under a key that cannot
+   read the database, walseal deciphers the WAL to noise, SQLite takes it for
+   empty, and a normal close would delete its committed frames. */
+int wasm_db_keep_wal(sqlite3 *db) {
+    return sqlite3_db_config(db, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, (int *)0);
 }

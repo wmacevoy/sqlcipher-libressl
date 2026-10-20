@@ -80,6 +80,18 @@ jobs:
         env:
           CHECK_TCL: ${{ matrix.artifact == 'libsqlcipher-linux-glibc-x64.a' && 'yes' || 'no' }}
 
+      # walseal is compiled only into the WASM build; these check it natively,
+      # against this amalgamation and LibreSSL. One crash-replay seed keeps the
+      # step to minutes; the three of the source run locally (CONTRIBUTING).
+      # check.sh leaves the tree clean, so the amalgamation is made again here.
+      - name: REQ1/DUR-2 REQ6/ENC-3 walseal checks — I/O, leak, crash replay, derived key
+        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
+        run: |
+          ./configure --with-tempstore=yes >/dev/null
+          make sqlite3.c >/dev/null
+          CC=gcc SEEDS=7 LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh all
+          make distclean >/dev/null
+
       # check.sh keeps the release build as libsqlcipher.a; the TCL suite's
       # test-only build never replaces it.
       - name: Rename artifact
@@ -194,7 +206,7 @@ jobs:
         run: |
           mkdir -p static-pkg
           cp sqlite3.c sqlite3.h static-pkg/
-          cp wasm/sqlcipher_wasm.c wasm/opfs_vfs.c static-pkg/
+          cp wasm/sqlcipher_wasm.c wasm/opfs_vfs.c wasm/walseal.c wasm/walseal.h wasm/walseal_sqlcipher.c static-pkg/
           cp $HOME/libressl-wasm/lib/libcrypto.a static-pkg/libcrypto-wasm.a
           cp -r $HOME/libressl/include/openssl static-pkg/openssl
           tar czf wasm/dist/sqlcipher-wasm-static.tar.gz -C static-pkg .
