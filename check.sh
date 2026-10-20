@@ -1,6 +1,7 @@
 #!/bin/sh
 # The native check, the same locally and in CI: build the pinned LibreSSL,
-# the release library, the smoke test, then upstream's TCL suite.
+# the release library, the smoke test, walseal's checks, then upstream's TCL
+# suite.
 # Exits non-zero on the first failure.
 #
 #   ./check.sh
@@ -9,6 +10,8 @@
 #   LIBRESSL_PREFIX  where LibreSSL is installed (default $HOME/libressl)
 #   CHECK_TCL        "no" skips the TCL suite (default "yes"). CI runs it on
 #                    linux-glibc-x64 only, where REQ1/UP-1 promises it.
+#   SEEDS            walseal's crash-replay seeds (default "7 11 23", about
+#                    13 minutes; run all three before a release). CI uses "7".
 #   TCL_LIBDIR       macOS: the directory holding libtcl8.6.dylib, when
 #                    testfixture cannot find it (Tcl from conda or Homebrew).
 #                    Not DYLD_LIBRARY_PATH: macOS drops that variable before
@@ -83,6 +86,11 @@ step "REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 smoke test: examples/basic.c against lib
 gcc -O2 -o example_basic examples/basic.c -I. -I"$prefix/include" \
   libsqlcipher.a "$prefix/lib/libcrypto.a" -lpthread -ldl -lm
 ./example_basic
+
+step "REQ1/DUR-2 REQ6/ENC-3 walseal: I/O, leak, crash replay (seeds ${SEEDS:-7 11 23}), derived key"
+# Compiled only into the WASM build; checked here natively, against this
+# amalgamation and LibreSSL, before the TCL suite's configure removes sqlite3.c.
+LIBRESSL=$prefix sh tests/walseal/walseal.sh all
 
 if [ "$check_tcl" = no ]; then
   step "REQ1/UP-1 REQ1/FMT-1 TCL suite: skipped (CHECK_TCL=no)"

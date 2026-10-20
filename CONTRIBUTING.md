@@ -77,13 +77,13 @@ site's data, or `shred()` the database.
 ## Test
 
 ```sh
-# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2) and upstream's suite (REQ1/UP-1, REQ1/FMT-1)
+# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2), walseal's checks (REQ1/DUR-2, REQ6/ENC-3) and
+# upstream's suite (REQ1/UP-1, REQ1/FMT-1). walseal's crash replay runs three seeds, about 13
+# minutes; SEEDS=7 runs one, as CI does.
 ./check.sh                                   # ends "0 errors out of 208 tests" and "PASS: check.sh"
 
-# walseal, natively (REQ1/DUR-2, REQ6/ENC-3): needs sqlite3.c from `make sqlite3.c`.
-# The crash replay takes about 13 minutes (CI runs SEEDS=7 only); `walseal.sh io|leak|crash|codec`
-# runs one part.
-LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh   # ends "walseal: all checks passed"
+# One part of walseal's checks, after `make sqlite3.c`: io, leak, crash or codec
+LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh crash   # ends "walseal: all checks passed"
 
 # Browser tests: copy the build and the fixture next to the runner, then run it
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
@@ -134,9 +134,10 @@ What CI builds from, and whether it can change under us. The rule: every tag nam
 | Playwright and its Chromium | `tests/wasm/package.json` and `package-lock.json`, installed with `npm ci` | 1.64.1, which fixes its browser build | nothing | a new browser arrives as a reviewed change, not as a red run |
 | Emscripten | `setup-emsdk`'s `version:` | 3.1.74 | nothing | it decides the WASM output |
 | upstream SQLCipher | `UPSTREAM_TAG` | v4.16.0 | nothing | the two-file diff is measured against it |
-| containers | `debian:bookworm`, `alpine:3.19` | the distribution release | point and patch updates | the release fixes the libc the `.a` targets; the updates are security fixes |
+| containers | `debian:bookworm`, `alpine:3.24` | the distribution release | point and patch updates | the release fixes the libc the `.a` targets; the updates are security fixes. Bookworm (supported to 2028-06) stays for its older glibc, which more systems can link against; Alpine 3.19 was out of support from 2025-11 and moved to 3.24 (supported to 2028-06), 2026-10-20 |
 | runners | `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-26` | the OS release | GitHub's image updates | `macos-26` is what `macos-latest` ran on 2026-10-20 and builds the shipped macOS `.a`; the Linux runners host a container, or (WASM) supply only `tcl` and `cmake` |
-| actions | `actions/*@v4`, `mymindstorm/setup-emsdk@v14`, `softprops/action-gh-release@v2` | the major version | minor and patch releases | the publisher's compatibility promise; pinning by commit SHA is an open choice |
+| actions, GitHub's | `actions/checkout@v7`, `upload-artifact@v7`, `download-artifact@v8`, `setup-node@v7` | the major version | minor and patch releases | the publisher's compatibility promise; all on Node 24 (the v4s ran on Node 20 and were forced onto 24) |
+| actions, third-party | `mymindstorm/setup-emsdk` (v16), `softprops/action-gh-release` (v3.0.3) | the commit SHA, with the tag in a comment | nothing | a moved tag in someone else's repository would run in our CI, and the release job has `contents: write`; bump by resolving the new tag's commit (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`) |
 | Node.js | `setup-node`'s `node-version` | 22 | minor and patch | runs only the test runner |
 
 To bump LibreSSL, download the new tarball, check its hash against the `SHA256` file OpenBSD
@@ -144,6 +145,16 @@ publishes (`https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/SHA256`), and change bo
 `libressl.env` together. To bump Playwright, change its version in `tests/wasm/package.json`, run
 `npm install --package-lock-only` there, and commit both files. A runner or container its
 publisher retires fails the job by name; move it to the next release then.
+
+## Releasing
+
+1. Master is green in CI.
+2. `./check.sh` passes locally with its default three crash-replay seeds (CI runs one).
+3. The version moves in the README's download commands and CONTRIBUTING's demo command.
+4. Tag and push: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. The `release` job
+   publishes the `.a` per platform, the WASM files, the JS helpers and
+   `sqlcipher-wasm-static.tar.gz`, with generated notes; edit the notes to name what changed for
+   integrators.
 
 ## Syncing with upstream
 
