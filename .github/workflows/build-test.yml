@@ -201,6 +201,25 @@ jobs:
 
       - name: REQ1/WASM-1 REQ1/DUR-1 REQ1/DUR-2 REQ1/API-1 run WASM tests in Chromium, Firefox and WebKit on the OPFS and IndexedDB backends
         run: node tests/wasm/run-tests.mjs
+        env:
+          NATIVE_EXPORT_DIR: ${{ runner.temp }}/exported
+
+      # Each browser run above saved what export() returned. This repository's native
+      # build (the amalgamation "Build WASM" made, and native LibreSSL) must open every one
+      # under its key; open-export.c says what it checks. Six files: three browsers, two
+      # backends (run-tests.mjs). Key and row count as in test.html.
+      - name: REQ1/EXP-1 REQ1/FMT-1 exported files open in the native build
+        run: |
+          gcc -O2 -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_TEMP_STORE=2 \
+            -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown \
+            -I. -I$HOME/libressl/include -o "$RUNNER_TEMP/open-export" tests/wasm/open-export.c sqlite3.c \
+            $HOME/libressl/lib/libcrypto.a -lpthread -lm
+          n=0
+          for f in "$RUNNER_TEMP"/exported/*.db; do
+            "$RUNNER_TEMP/open-export" "$f" export-key 50
+            n=$((n + 1))
+          done
+          if [ "$n" -ne 6 ]; then echo "FAIL: REQ1/EXP-1 $n exported files, want 6"; exit 1; fi
 
       - name: Package static libs for custom WASM builds
         run: |

@@ -1006,6 +1006,21 @@
     await assertRejects(root.getFileHandle("t23.db-wal"), /./, "the -wal is gone");
   });
 
+  // ── Exported files in the native build ─────────────────────
+  //
+  // The rows stay in the WAL until export() checkpoints. run-tests.mjs saves the bytes left in
+  // window.nativeExport, and CI opens each file with this repository's native build
+  // (tests/wasm/open-export.c, key "export-key", 50 rows: keep the three in step).
+
+  await test("REQ1/EXP-1 export returns the whole database, for the native build to open", async function() {
+    var db = await SQLCipher.open({filename: "/t26.db", key: "export-key"});
+    await writeRows(db, 50);
+    var bytes = await db.export();
+    await db.close();
+    assert(bytes.length >= 2 * 4096, "at least the schema page and a table page: " + bytes.length + " bytes");
+    window.nativeExport = Array.from(bytes);
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";

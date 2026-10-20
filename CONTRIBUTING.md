@@ -91,6 +91,11 @@ cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
 (cd tests/wasm && npm ci && npx playwright install chromium firefox webkit)   # Playwright as locked
 node tests/wasm/run-tests.mjs                # ends "Result: 6/6 browser/backend runs passed -- PASS"
+
+# Exported files in the native build (REQ1/EXP-1, REQ1/FMT-1): save each run's export(),
+# then open each with open-export.c, built on sqlite3.c (see its header for the gcc line)
+NATIVE_EXPORT_DIR=/tmp/exported node tests/wasm/run-tests.mjs
+for f in /tmp/exported/*.db; do ./open-export "$f" export-key 50; done   # each prints "PASS: ..."
 ```
 
 On macOS with Tcl from conda or Homebrew, `testfixture` may not find `libtcl8.6.dylib`
@@ -102,7 +107,8 @@ CI (`.github/workflows/build-test.yml`) checks that `src/` differs from upstream
 two patched files, runs `check.sh` on all four platforms (the TCL suite on linux-glibc-x64 only),
 checks that each `.a` is the architecture its name says (`objdump -f`, or `lipo -info` on macOS)
 before uploading it, and builds and runs the browser tests in headless Chromium, Firefox and
-WebKit, once per backend in each (`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it
+WebKit, once per backend in each (`?backend=opfs`, `?backend=indexeddb`), then opens the file
+each run exported with the native build. On a `v*` tag it
 publishes the release (`.a` per platform, the WASM files, the JS helpers,
 `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
 `gh workflow run build-test.yml --repo wmacevoy/sqlcipher-libressl --ref <branch>`.
