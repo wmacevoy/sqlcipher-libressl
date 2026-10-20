@@ -14,7 +14,7 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | oo1 shim | 6 | `wasm/sqlcipher-oo1.js` | sqlite3's oo1 API on the main thread; file in MEMFS; `save()` writes the whole file to IndexedDB | open DB, statements |
 | worker | 5 | `wasm/sqlcipher-worker.js` | answers the message protocol; chooses the backend; keeps the handle table the VFS reads and writes | handle table, current filename and key, IndexedDB buffer |
 | VFS | 4 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker's handle table through `EM_JS` | no |
-| WASM helpers | 4 | `wasm/sqlcipher_wasm.c` | thin `wasm_db_*` / `wasm_stmt_*` wrappers, so JS never manages WASM memory | no |
+| WASM helpers | 4 | `wasm/sqlcipher_wasm.c` | thin `wasm_db_*` / `wasm_stmt_*` wrappers, so JS never manages WASM memory; one set of SQL-function trampolines that call the oo1 shim through `EM_JS` | no |
 | SQLCipher | 3 | `src/` (upstream + the patches), built as `sqlite3.c` | SQLite with page encryption; `sqlite3_key` | SQLite's own |
 | crypto provider | 2 | `src/crypto_openssl.c` (patched) | HMAC, PBKDF2, AES and random bytes through LibreSSL | key material in SQLCipher's context |
 | LibreSSL | 1 | `libcrypto.a` (native and an Emscripten build) | the OpenSSL 1.1-style API | no |
@@ -97,6 +97,18 @@ Reasons are from the commit messages unless marked *(inferred)*
   runner. Rejected: moving it to an Intel runner.
 - **No key means an unencrypted database** (maintainer, 2026-10-20) — REQ2/ENC-2 — compatible with
   SQLCipher; a hard call. Rejected: rejecting `open()` without a key.
+- **oo1 SQL functions through fixed C trampolines and a registry on `Module`** (PR #5) — REQ4/OO1-2
+  — every function registered from JS uses the same five C callbacks; the function's user data is
+  an id into `Module._oo1_fns`, and SQLite's destructor removes it on replace or close. Rejected:
+  Emscripten's `addFunction`, which needs `ALLOW_TABLE_GROWTH` and a signature per callback.
+  Aggregate and window callbacks get a key from `sqlite3_aggregate_context()` where upstream passes
+  `pCtx`, because SQLite calls `xFinal` and `xValue` with a context of their own
+  (`sqlite3VdbeMemFinalize`), so `pCtx` cannot key per-group state.
+- **The oo1 shim's string `key` stays a passphrase** (PR #5, *inferred*; REQUIREMENTS_v4
+  *Assumptions*) — REQ4/OO1-2 — the shim always applied it with `sqlite3_key`, as the unified API
+  does. Rejected: the reference's old description (UTF-8 bytes as a raw key), under which a
+  database written by one API would not open in the other. Raw keys are the `hexkey` option, or a
+  byte-array `key`.
 
 ## Known hazards
 

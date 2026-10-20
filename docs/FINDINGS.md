@@ -4,6 +4,23 @@ What was learned the expensive way: surprises, dead ends, measurements. Blameles
 have found it, not who should have asked. Newest first. Entries before 2026-10-19 are reconstructed
 from commit messages.
 
+## 2026-10-20 — Completing the oo1 shim: what the missing methods were hiding
+
+- **What happened:** writing a test per behavior in `docs/oo1-api.md` (REQ4/OO1-2) found more than
+  the ten missing methods. `step()` reported a failed statement as "no more rows", so
+  `exec({sql, bind})` and `stepReset()` dropped errors silently (the oo1 side of REQ1/ERR-1).
+  `exec()` with any option ran only the first statement. A statement left open at `close()` kept
+  its pointer, and a later `finalize()` freed it twice. The statement list grew by one entry per
+  `prepare()` for the life of the DB. `bind({$name: v})` threw "not yet supported". A byte-array
+  `key` was applied as the text `"1,2,3..."`. And `pCtx`, which upstream tells aggregate callbacks
+  to key state by, is a different pointer in `xFinal` than in `xStep`.
+- **Kind:** K3 — the reference described upstream's oo1, and no test read it.
+- **Cost:** none reported; the shim's only user is the maintainer's own projects.
+- **Findable by:** the check that every documented method exists, now a test; a test per
+  documented behavior.
+- **Changed:** all fixed in PR #5. Still open: `get()` and `getInt()` read integers as 32-bit
+  (`sqlite3_column_int`), so a larger integer comes back wrong — QUEUE #15.
+
 ## 2026-10-20 — The oo1 reference documents methods the shim does not have
 
 - **What happened:** `docs/oo1-api.md` describes the official sqlite3 oo1 API, including BLOBs
