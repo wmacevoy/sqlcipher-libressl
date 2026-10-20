@@ -121,15 +121,21 @@ Reasons are from the commit messages unless marked *(inferred)*
 
 ## Known hazards
 
-From reading the code on 2026-10-20; none of them has been run. Each is a QUEUE item with a test to
-write first.
+From reading the code on 2026-10-20. Each is a QUEUE item with a test to write first; the first
+has now been run.
 
 - **No journal survives a crash.** SQLite writes changed pages into the database file during commit.
   With the journal in memory and `xAccess` always "no", a worker that dies partway through leaves a
   half-written file and nothing to roll it back. On OPFS that is any commit. On IndexedDB each flush
   is one IndexedDB transaction after a whole `exec`, so the exposure is narrower: a transaction left
   open across `exec` calls that grows large enough to spill SQLite's cache, whose uncommitted pages
-  the next flush then stores. This contradicts REQ1/DUR-2.
+  the next flush then stores. This contradicts REQ1/DUR-2. **Confirmed** by the REQ1/DUR-2 crash
+  tests in `tests/wasm/test.html` (`crash-worker.js` kills the worker before each VFS write), the
+  same in Chromium, Firefox and WebKit: on OPFS, a kill during a commit's main-file writes leaves
+  `database disk image is malformed`, and a kill after a cache spill leaves the uncommitted rows
+  visible with `integrity_check` ok; on IndexedDB a one-`exec` transaction always reopens at its
+  last commit, and a transaction spanning `exec`s shows its uncommitted rows once a spilled page has
+  been flushed.
 - **A failed flush leaves memory ahead of storage.** The statement has already applied in the
   worker; the promise rejects; nothing rolls the memory copy back.
 
