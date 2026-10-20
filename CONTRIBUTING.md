@@ -36,15 +36,20 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 ## Build
 
-Needs LibreSSL 4.2.1 installed at `$HOME/libressl` (the README shows how).
+Needs a C compiler, `make`, `cmake` and `curl`; for the TCL suite, Tcl and its headers.
 
 ```sh
-./configure --with-tempstore=yes \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
-  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-make -j8              # libsqlite3.a
-make sqlite3.c        # amalgamation
+./check.sh            # LibreSSL, the release library, the smoke test, the TCL suite
 ```
+
+`check.sh` is the native build and test, the same one CI's `native` job runs. It downloads the
+LibreSSL release pinned in `libressl.env`, checks its SHA-256, and installs it at
+`$LIBRESSL_PREFIX` (default `$HOME/libressl`); builds `libsqlite3.a` and `sqlite3.c` and keeps a copy
+of the release library as `libsqlcipher.a`; runs the smoke test against it; then reconfigures with
+upstream's test flags and runs the TCL suite. It exits non-zero at the first failure. Because the
+suite reconfigures, the tree ends in the test build: ship `libsqlcipher.a`, never a `libsqlite3.a`
+built after it. `CHECK_TCL=no ./check.sh` stops after the smoke test; CI sets it everywhere but
+linux-glibc-x64, the one platform REQ1/UP-1 names.
 
 WASM needs Emscripten 3.1.74 and a second LibreSSL built with `emcmake` (the `wasm` job in
 `.github/workflows/build-test.yml` shows the commands), then:
@@ -69,18 +74,8 @@ site's data, or `shred()` the database.
 ## Test
 
 ```sh
-# Smoke test (REQ1/ENC-1, REQ2/ENC-2)
-gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
-  libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-./basic
-
-# Upstream's suite (REQ1/UP-1, REQ1/FMT-1). Needs its own configure; never ship this build.
-make distclean
-./configure --with-tempstore=yes --enable-fts5 \
-  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_TEST -I$HOME/libressl/include" \
-  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-make testfixture
-cd test && ../testfixture sqlcipher.test     # ends "0 errors out of 208 tests"
+# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2) and upstream's suite (REQ1/UP-1, REQ1/FMT-1)
+./check.sh                                   # ends "0 errors out of 208 tests" and "PASS: check.sh"
 
 # Browser tests: copy the build and the fixture next to the runner, then run it
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
@@ -90,21 +85,22 @@ cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
 node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 failed -- PASS"
 ```
 
-On macOS with Tcl from conda or Homebrew, `testfixture` may need
-`DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
+On macOS with Tcl from conda or Homebrew, `testfixture` may not find `libtcl8.6.dylib`
+("Library not loaded: @rpath/libtcl8.6.dylib"). Name its directory in `TCL_LIBDIR`:
+`TCL_LIBDIR=$HOME/miniforge3/lib ./check.sh`, for example. `DYLD_LIBRARY_PATH` does not work
+here: macOS drops it before `/bin/sh` starts, so it never reaches `testfixture`.
 
-CI (`.github/workflows/build-test.yml`) checks the LibreSSL tarball against its SHA-256, checks
-that `src/` differs from upstream's tag only in the
-two patched files, builds and smoke-tests on all four platforms, checks that each `.a` is the
-architecture its name says (`objdump -f`, or `lipo -info` on macOS) before uploading it, runs
-upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium. On
+CI (`.github/workflows/build-test.yml`) checks that `src/` differs from upstream's tag only in the
+two patched files, runs `check.sh` on all four platforms (the TCL suite on linux-glibc-x64 only),
+checks that each `.a` is the
+architecture its name says (`objdump -f`, or `lipo -info` on macOS) before uploading it, and builds and runs the browser tests in headless Chromium. On
 a `v*` tag it publishes the release (`.a` per platform, the WASM files, the JS helpers,
 `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
 `gh workflow run build-test.yml --repo wmacevoy/sqlcipher-libressl --ref <branch>`.
 
 **The trace.** Browser test names, the smoke test's steps, and CI step names start with the
 requirement IDs they test (`REQ1/ENC-1 wrong key rejection`), so `grep -rn REQ1/ENC-1 tests/
-examples/ .github/` finds a requirement's tests. Upstream's `test/*.test` files are not renamed:
+examples/ .github/ check.sh` finds a requirement's tests. Upstream's `test/*.test` files are not renamed:
 `sqlcipher.test` is REQ1/UP-1, and its `sqlcipher-compatibility.test` is REQ1/FMT-1 natively. A
 requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 
@@ -125,7 +121,7 @@ What CI builds from, and whether it can change under us. The rule: every tag nam
 
 | Input | Where | Pinned to | Floats | Why |
 | ----- | ----- | --------- | ------ | --- |
-| LibreSSL tarball | `LIBRESSL_VERSION`, `LIBRESSL_SHA256` in the workflow's `env` | 4.2.1, by SHA-256 | nothing | the crypto we ship; a changed tarball must stop the build (REQ1/LIB-1) |
+| LibreSSL tarball | `LIBRESSL_VERSION`, `LIBRESSL_SHA256` in `libressl.env` (read by `check.sh` and the wasm job) | 4.2.1, by SHA-256 | nothing | the crypto we ship; a changed tarball must stop the build (REQ1/LIB-1) |
 | Playwright and its Chromium | `tests/wasm/package.json` and `package-lock.json`, installed with `npm ci` | 1.64.1, which fixes its browser build | nothing | a new browser arrives as a reviewed change, not as a red run |
 | Emscripten | `setup-emsdk`'s `version:` | 3.1.74 | nothing | it decides the WASM output |
 | upstream SQLCipher | `UPSTREAM_TAG` | v4.16.0 | nothing | the two-file diff is measured against it |
@@ -135,8 +131,8 @@ What CI builds from, and whether it can change under us. The rule: every tag nam
 | Node.js | `setup-node`'s `node-version` | 22 | minor and patch | runs only the test runner |
 
 To bump LibreSSL, download the new tarball, check its hash against the `SHA256` file OpenBSD
-publishes (`https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/SHA256`), and change both `env` values
-together. To bump Playwright, change its version in `tests/wasm/package.json`, run
+publishes (`https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/SHA256`), and change both values in
+`libressl.env` together. To bump Playwright, change its version in `tests/wasm/package.json`, run
 `npm install --package-lock-only` there, and commit both files. A runner or container its
 publisher retires fails the job by name; move it to the next release then.
 
