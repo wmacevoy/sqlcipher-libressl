@@ -164,10 +164,15 @@ var SQLCipher = (function() {
     var worker = new Worker(workerUrl);
     var handle = new Handle(worker, "pending", filename);
 
-    var initResult = await handle._send({type: "init"});
-    handle.mode = initResult.mode;
+    try {
+      var initResult = await handle._send({type: "init"});
+      handle.mode = initResult.mode;
 
-    await handle._send({type: "open", filename: filename, key: key});
+      await handle._send({type: "open", filename: filename, key: key});
+    } catch (e) {
+      worker.terminate();   // the caller never gets the handle, so nothing else can end it
+      throw e;
+    }
     return handle;
   }
 
