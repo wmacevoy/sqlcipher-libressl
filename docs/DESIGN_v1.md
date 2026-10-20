@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v5](REQUIREMENTS_v5.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v6](REQUIREMENTS_v6.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -56,7 +56,7 @@ worker at any moment. DUR-2 depends on what is in memory when that happens; see 
 - **Release artifact names.** Downstream builds fetch them by name.
 
 Today every downstream is the maintainer's own project, in development, so these doors are cheap to
-change for now (maintainer, 2026-10-20; REQUIREMENTS_v5 *Assumptions*). They close when an outside
+change for now (maintainer, 2026-10-20; REQUIREMENTS_v6 *Assumptions*). They close when an outside
 project depends on them. Reviewed by: _nobody independent yet_.
 
 ## Decisions
@@ -91,8 +91,24 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **Flush after every `exec`** (`ba34611b`) — REQ1/DUR-1 — matches OPFS, which is durable per
   commit. Rejected: explicit `save()` (renamed `flush()`, `087b6ec5`, and kept for manual use).
 - **Journal, WAL and SHM in memory on both backends** (`d68bba71`) — "transient and don't need
-  persistence"; this fixed "unable to open database file" on every OPFS write. **Contested:** see
-  Known hazards.
+  persistence"; this fixed "unable to open database file" on every OPFS write. **Superseded** by the
+  next decision, once it lands (QUEUE #16).
+- **A write-ahead log on storage, its headers enciphered by walseal** (maintainer, 2026-10-20) —
+  REQ1/DUR-2, REQ6/ENC-3 — `locking_mode=EXCLUSIVE` then `journal_mode=WAL`: one connection per
+  worker already holds the file exclusively, and exclusive mode keeps the WAL index in heap memory,
+  so the VFS needs no shared memory. The `-wal` file is a real file on the backend, opened ahead of
+  time like the database (`createSyncAccessHandle` is asynchronous; SQLite's open is not), and
+  `xAccess` answers truthfully, so recovery finds it. walseal, a VFS shim from the maintainer's
+  `sqlcipher-embedded` (branch `experiment/wal-seal`, `embedded/sqlcipher/walseal.c`), enciphers the
+  WAL's file and frame headers in place with a length-preserving tweaked PRP, keeping SQLite's
+  layout, writes and syncs; it is ported from PSA Crypto to LibreSSL's `libcrypto`. Its key is
+  derived from SQLCipher's own derived key for the database, not from the passphrase, so the
+  headers cost the same PBKDF2 work to attack as the pages. Rejected: a rollback journal in
+  `TRUNCATE` mode (simpler, no crypto, but every page written twice, page numbers in the clear in
+  the journal, and the IndexedDB spill hazard stays); the passphrase as walseal's key (brute-forced
+  without PBKDF2's cost); a separate WAL key option (new API surface and key management for
+  integrators). Also ends the IndexedDB spill hazard: uncommitted pages now go to the WAL, not the
+  database file.
 - **Shred overwrites with `crypto.getRandomValues` before deleting** (`3033477f`, fixed `e12e2185`)
   — REQ1/SHR-1 — defense in depth on top of encryption.
 - **The TCL suite has its own configure, after the release `.a` is kept** (PR #1) — REQ1/UP-1
@@ -104,7 +120,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   `sh` has no `pipefail`. The LibreSSL pin moved to `libressl.env` so `check.sh` and the wasm job
   read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v5.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v6.md#scope-decisions).
 - **Drop the macos-x64 build** (maintainer, 2026-10-20) — REQ2/PLAT-1 — it was built on an arm64
   runner. Rejected: moving it to an Intel runner.
 - **No key means an unencrypted database** (maintainer, 2026-10-20) — REQ2/ENC-2 — compatible with
@@ -148,6 +164,12 @@ has now been run.
   visible with `integrity_check` ok; on IndexedDB a one-`exec` transaction always reopens at its
   last commit, and a transaction spanning `exec`s shows its uncommitted rows once a spilled page has
   been flushed.
+- **A torn page 1 during a checkpoint makes the database unopenable** (found in
+  `sqlcipher-embedded`, its README): SQLCipher reads the KDF salt from page 1 of the database file
+  before it consults the WAL. Killing a worker cannot tear a write, since each `write()` on a sync access
+  handle completes or never starts, but a power loss or an OS crash might. A raw key that includes the salt
+  (`x'<key><salt>'`) recovers it. Not addressed; a question for the maintainer if power loss
+  matters.
 - **A failed flush leaves memory ahead of storage.** The statement has already applied in the
   worker; the promise rejects; nothing rolls the memory copy back.
 
