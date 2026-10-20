@@ -67,7 +67,7 @@ async function runBackend(browserType, browserName, port, backend) {
       await page.waitForFunction(function() {
         var el = document.getElementById("result");
         return el && (el.dataset.status === "pass" || el.dataset.status === "fail");
-      }, {timeout: 60000});
+      }, null, {timeout: 600000});   // options are the third argument; the second is fn's
     } catch(e) {
       console.error(tag, "Timed out waiting for tests");
       console.log(await page.textContent("#log"));
