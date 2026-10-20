@@ -41,7 +41,24 @@
     if (a !== b) throw new Error((msg || "assertEqual") + ": " + JSON.stringify(a) + " !== " + JSON.stringify(b));
   }
 
+  // ?backend=opfs or ?backend=indexeddb (set by run-tests.mjs) forces the worker's backend
+  // through the test-only wrapper backend-worker.js; with no query the browser chooses.
+  var BACKEND = new URLSearchParams(location.search).get("backend");
+  var WORKER_QUERY = BACKEND ? "?backend=" + BACKEND : "";
+  var _open = SQLCipher.open;
+  SQLCipher.open = function(opts) {
+    return _open(Object.assign({workerUrl: "backend-worker.js" + WORKER_QUERY}, opts));
+  };
+
   // ── Tests ──────────────────────────────────────────────────
+
+  await test("REQ1/API-1 mode reports the backend in use", async function() {
+    var db = await SQLCipher.open({filename: "/t0.db", key: "k0"});
+    resultEl.dataset.mode = db.mode;
+    log("Backend: " + db.mode + (BACKEND ? " (expected " + BACKEND + ")" : " (browser's choice)"));
+    if (BACKEND) assertEqual(db.mode, BACKEND, "mode");
+    await db.close();
+  });
 
   await test("REQ1/API-1 open and close", async function() {
     var db = await SQLCipher.open({filename: "/t1.db", key: "k1"});
@@ -617,7 +634,7 @@
       setTimeout(function() { reject(new Error("no probe report within 10 s")); }, 10000);
     });
     try {
-      var db = await SQLCipher.open({filename: "/t16.db", key: "k16", workerUrl: "shred-probe-worker.js"});
+      var db = await SQLCipher.open({filename: "/t16.db", key: "k16", workerUrl: "shred-probe-worker.js" + WORKER_QUERY});
       await db.exec("CREATE TABLE t (x BLOB)");
       await db.exec("INSERT INTO t VALUES (?)", [ALL_BYTES]);
       await db.exec("INSERT INTO t VALUES (zeroblob(20000))");
@@ -625,6 +642,7 @@
       await db.shred();
       var r = await reported;
       assert(!r.error, "probe could not read the file: " + r.error);
+      if (BACKEND) assertEqual(r.backend, BACKEND, "backend the probe saw");
       assertEqual(r.bytes.length, stored.length, r.backend + ": length of what was deleted");
       var same = 0;
       for (var i = 0; i < stored.length; i++) if (r.bytes[i] === stored[i]) same++;
