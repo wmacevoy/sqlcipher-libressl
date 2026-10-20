@@ -564,6 +564,40 @@
     db.close();
   });
 
+  // ── Errors ─────────────────────────────────────────────────
+
+  async function assertRejects(promise, pattern, msg) {
+    try { await promise; } catch (e) {
+      assert(pattern.test(e.message), msg + ": rejected with \"" + e.message + "\", want " + pattern);
+      return;
+    }
+    throw new Error(msg + ": did not reject");
+  }
+
+  await test("REQ1/ERR-1 exec with bind values rejects on a failed step", async function() {
+    var db = await SQLCipher.open({filename: "/t13.db", key: "k13"});
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+    await db.exec("INSERT INTO t VALUES (?, ?)", [1, "a"]);
+    await assertRejects(db.exec("INSERT INTO t VALUES (?, ?)", [1, "dup"]),
+                        /UNIQUE constraint failed: t\.id/, "duplicate key");
+    var rows = await db.select("SELECT name FROM t");
+    assertEqual(rows.length, 1, "rows after the failed insert");
+    assertEqual(rows[0].name, "a", "the original row");
+    await db.exec("INSERT INTO t VALUES (?, ?)", [2, "b"]);   // the worker is still usable
+    await db.close();
+  });
+
+  await test("REQ1/ERR-1 select rejects on a failed step", async function() {
+    var db = await SQLCipher.open({filename: "/t14.db", key: "k14"});
+    await assertRejects(db.select("SELECT abs(-9223372036854775807 - 1) AS x"),
+                        /integer overflow/, "without bind values");
+    await assertRejects(db.select("SELECT abs(?) AS x", [BigInt("-9223372036854775808")]),
+                        /integer overflow/, "with bind values");
+    var rows = await db.select("SELECT 1 AS x");
+    assertEqual(rows[0].x, 1, "still usable");
+    await db.close();
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
