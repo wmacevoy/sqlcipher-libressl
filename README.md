@@ -189,6 +189,8 @@ cd test && ../testfixture sqlcipher.test
 (upstream's `sqlcipher-compatibility.test`, inside `sqlcipher.test`:
 1.1.8 through 4.0 files from `sqlcipher-resources/`) and in WASM (the
 `REQ1/FMT-1` test in `tests/wasm/test.html`, which opens the 4.0 file).
+Files the WASM build exports open in this repository's native build: CI
+opens each browser run's `export()` under its key (`tests/wasm/open-export.c`).
 
 **Not tested, by decision:** stock SQLCipher opening files written here.
 The reason and when to revisit are under *Scope decisions* in
