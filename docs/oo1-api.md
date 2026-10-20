@@ -111,7 +111,7 @@ var rows = db.exec({
 | `rowMode` | string \| integer | Shape of each row: `"array"`, `"object"`, `"stmt"` (the `Stmt` itself, callback only), a 0-based column index, or `"$columnName"` (that column's value). Default: `"array"`. |
 | `resultRows` | array | If provided, each result row is pushed here. Throws with `rowMode: "stmt"`. |
 | `columnNames` | array | If provided, emptied and filled with the column names of the first statement that has result columns. |
-| `saveSql` | array | If provided, the SQL text of each executed statement is appended. |
+| `saveSql` | array | If provided, the SQL text of each executed statement is appended, as written (with its `;`), trimmed. |
 | `returnValue` | string | What `exec()` returns: `"this"` (default), `"resultRows"`, or `"saveSql"` (each creates its array if not given). |
 
 ---

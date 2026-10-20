@@ -338,7 +338,7 @@
     assertEqual(JSON.stringify(names), '["id","name"]', "columnNames from the first statement");
 
     var sql = db.exec({sql: "SELECT 1; SELECT 2", returnValue: "saveSql"});
-    assertEqual(JSON.stringify(sql), '["SELECT 1","SELECT 2"]', "saveSql");
+    assertEqual(JSON.stringify(sql), '["SELECT 1;","SELECT 2"]', "saveSql");
 
     var stopped = [];
     db.exec({sql: "SELECT id FROM t ORDER BY id", rowMode: 0,
@@ -445,7 +445,7 @@
     } finally {
       console.log = realLog;
     }
-    assertEqual(JSON.stringify(logged), '["SQL TRACE: SELECT 1","SQL TRACE: SELECT 2"]', "flag t");
+    assertEqual(JSON.stringify(logged), '["SQL TRACE: SELECT 1;","SQL TRACE: SELECT 2"]', "flag t");
   });
 
   await test("REQ4/OO1-2 createFunction: scalar, aggregate, window", async function() {
