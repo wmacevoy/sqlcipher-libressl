@@ -763,7 +763,7 @@ await db.save();   // exports entire encrypted blob → IndexedDB
 | Write cost | 4KB per changed page to the WAL, again at each checkpoint | 4KB per dirty block | Entire database blob |
 | Tab crash | Data safe (the next open replays the WAL) | Data safe (the stored copy is the last flushed commit) | Data since last `save()` lost |
 | Thread | Worker (auto) | Worker (auto) | Main thread |
-| Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers | All browsers |
+| Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ (untested: CI runs current Chromium, Firefox and WebKit) | All browsers | All browsers |
 
 ### What's stored
 

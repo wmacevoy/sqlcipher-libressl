@@ -84,7 +84,7 @@ BLOB columns read back as `Uint8Array`; integers as numbers, or as `BigInt`s bey
 | **Durability** | Every COMMIT, synced to the write-ahead log (`-wal`) | Every exec (checkpoint, then auto-flush) |
 | **Write cost** | 4KB per changed page to the WAL, again at each checkpoint | 4KB per dirty block |
 | **Tab crash** | Data safe (the next open replays the WAL's commits) | Data safe (the stored copy is the last flushed commit) |
-| **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
+| **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ (untested: CI runs current Chromium, Firefox and WebKit) | All browsers |
 
 The worker opens every database in `locking_mode=EXCLUSIVE` and `journal_mode=WAL`. On OPFS the
 `-wal` file sits next to the database; SQLCipher encrypts the pages in it, and walseal enciphers
@@ -194,7 +194,7 @@ opens each browser run's `export()` under its key (`tests/wasm/open-export.c`).
 
 **Not tested, by decision:** stock SQLCipher opening files written here.
 The reason and when to revisit are under *Scope decisions* in
-[docs/REQUIREMENTS_v6.md](docs/REQUIREMENTS_v6.md#scope-decisions).
+[docs/REQUIREMENTS_v7.md](docs/REQUIREMENTS_v7.md#scope-decisions).
 
 ## Patches
 

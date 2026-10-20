@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v6](REQUIREMENTS_v6.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v7](REQUIREMENTS_v7.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -62,7 +62,7 @@ memory, and stores only flushed, committed states; the oo1 shim keeps everything
 - **Release artifact names.** Downstream builds fetch them by name.
 
 Today every downstream is the maintainer's own project, in development, so these doors are cheap to
-change for now (maintainer, 2026-10-20; REQUIREMENTS_v6 *Assumptions*). They close when an outside
+change for now (maintainer, 2026-10-20; REQUIREMENTS_v7 *Assumptions*). They close when an outside
 project depends on them. Reviewed by: _nobody independent yet_.
 
 ## Decisions
@@ -182,7 +182,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   `sh` has no `pipefail`. The LibreSSL pin moved to `libressl.env` so `check.sh` and the wasm job
   read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v6.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v7.md#scope-decisions).
 - **The native build opens what the WASM build exports** (maintainer, 2026-10-20) — REQ1/EXP-1,
   REQ1/FMT-1 — under WAL the newest rows sit in the `-wal` until `export()` checkpoints, and the
   exported file is a WAL-mode file with no `-wal` beside it. `run-tests.mjs` saves each run's
