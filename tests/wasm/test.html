@@ -735,21 +735,15 @@
   }
 
   // Opens filename with the ordinary worker. On OPFS the killed worker's access handle is
-  // released some time after terminate(), and until then open fails; so retry, ending each
-  // failed attempt's worker, which SQLCipher.open leaves running.
+  // released some time after terminate(), and until then open fails; so retry. A failed
+  // open ends its own worker (REQ1/API-1, tested above).
   async function crashReopen(filename, key) {
-    var RealWorker = window.Worker;
     for (var attempt = 1; ; attempt++) {
-      var made = null;
-      window.Worker = function(url) { made = new RealWorker(url); return made; };
-      var opening = SQLCipher.open({filename: filename, key: key || CRASH_KEY});  // makes its worker at once
-      window.Worker = RealWorker;
       try {
-        var db = await opening;
+        var db = await SQLCipher.open({filename: filename, key: key || CRASH_KEY});
         db.attempts = attempt;
         return db;
       } catch (e) {
-        if (made) made.terminate();
         if (attempt === 50) throw e;
         await new Promise(function(resolve) { setTimeout(resolve, 100); });
       }
