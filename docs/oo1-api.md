@@ -1,14 +1,18 @@
 # SQLCipher WASM -- oo1 API Reference
 
-This API matches the official sqlite3 WASM oo1 API
-(<https://sqlite.org/wasm/doc/trunk/api-oo1.md>) with SQLCipher
-encryption added via the `key` constructor option.
+The oo1 shim (`sqlcipher-oo1.js`) follows the official sqlite3 WASM oo1 API
+(<https://sqlite.org/wasm/doc/trunk/api-oo1.md>), with SQLCipher
+encryption added by the `key` constructor options.  Where it differs, this
+reference says so, and [Differences](#differences-from-official-sqlite3-wasm-oo1)
+lists the differences together.
 
-The oo1 layer wraps the low-level C API (`sqlite3_open_v2`,
-`sqlite3_prepare_v2`, etc.) in two JavaScript classes -- `DB` and `Stmt`
--- exposed as `sqlite3.oo1.DB` and `sqlite3.oo1.Stmt` after the WASM
-module is initialized.  All methods are synchronous and must run in the
-same thread as the WASM instance.
+The shim wraps the WASM build's C helpers (`sqlcipher_wasm.c`) in two
+JavaScript classes, `DB` and `Stmt`.  `DB` is a global (or
+`require("./sqlcipher-oo1.js").DB`) and takes the module from
+`initSqlcipher()` as its first argument; `Stmt` objects come only from
+`DB.prototype.prepare()`.  All methods are synchronous and run on the
+thread that loaded the WASM module.  Errors are thrown as `Error`s
+carrying SQLite's message.
 
 ---
 
@@ -17,49 +21,56 @@ same thread as the WASM instance.
 ### Constructor
 
 ```js
-// In-memory database, default flags "c" (create + read/write)
-var db = new sqlite3.oo1.DB();
+var Module = await initSqlcipher();
 
-// Named file (in whichever VFS is active)
-var db = new sqlite3.oo1.DB("/mydata.db");
+// In-memory database, flags "c" (create + read/write)
+var db = new DB(Module);
+
+// Named file, in the module's in-memory file system (MEMFS)
+var db = new DB(Module, "/mydata.db");
 
 // Positional: filename, flags, vfs
-var db = new sqlite3.oo1.DB("/mydata.db", "c", "opfs");
+var db = new DB(Module, "/mydata.db", "c", "unix-none");
 
-// Options object -- the preferred form for encrypted databases
-var db = new sqlite3.oo1.DB({
-  filename: ":memory:",
+// Options object -- the form for encrypted databases
+var db = new DB(Module, {
+  filename: "/mydata.db",
   flags:    "c",
   vfs:      null,
-  key:      "correct-horse-battery-staple"   // SQLCipher encryption key
+  key:      "correct-horse-battery-staple"   // SQLCipher passphrase
 });
 ```
 
-**Parameters (positional form):**
+**Parameters (positional form, after `Module`):**
 
 | # | Name | Default | Description |
 |---|------|---------|-------------|
-| 1 | `filename` | `":memory:"` | Database path. Special names: `":memory:"`, `""` (temp on-disk), `":localStorage:"`, `":sessionStorage:"` (kvvfs, main thread only). |
-| 2 | `flags` | `"c"` | One or more of: `c` (create + read/write), `w` (read/write), `r` (read-only), `t` (trace SQL to console). |
-| 3 | `vfs` | `null` | VFS name string, or falsy for the default VFS. |
+| 1 | `filename` | `":memory:"` | Database path. Special names: `":memory:"`, `""` (a temporary database). |
+| 2 | `flags` | `"c"` | One or more of: `c` (create + read/write), `w` (read/write; the file must exist), `r` (read-only), `t` (log each statement's SQL to the console as `SQL TRACE: ...` when it is prepared). `c` outranks `w`, which outranks `r`. Any other letter throws. |
+| 3 | `vfs` | `null` | VFS name, or falsy for the default. This build has SQLite's `unix` VFSes (`unix`, `unix-none`, `unix-dotfile`, `unix-excl`) over MEMFS. |
 
-**Options object properties** (all optional except `filename`):
+**Options object properties** (all optional):
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `filename` | string | Same as positional. |
 | `flags` | string | Same as positional. Default `"c"`. |
 | `vfs` | string \| null | Same as positional. |
-| `key` | string \| ArrayBuffer \| Uint8Array | Encryption key. Strings are UTF-8-encoded then applied as a hex key. Byte arrays are applied as hex keys directly. |
-| `textkey` | string \| ArrayBuffer \| Uint8Array | Encryption key applied verbatim as `PRAGMA textkey`. |
-| `hexkey` | string \| ArrayBuffer \| Uint8Array | Encryption key applied as `PRAGMA hexkey`. If a byte array, converted to its hex representation. |
+| `key` | string \| ArrayBuffer \| typed array | A string is a passphrase, run through SQLCipher's key derivation as `PRAGMA key='...'` does -- the same as the unified API's `key`, so a database written by one opens in the other. Bytes are a raw 256-bit key (32 bytes), or a raw key and its salt (48 bytes), used without derivation. |
+| `textkey` | string \| ArrayBuffer \| typed array | A passphrase, as a string or as UTF-8 bytes. Same as a string `key`. |
+| `hexkey` | string \| ArrayBuffer \| typed array | A raw key: 64 hex digits (or 96, with the salt), or the bytes they stand for. Same as a byte-array `key`. |
+| `bytes` | Uint8Array | Written to `filename` in MEMFS before opening -- a database to restore. |
+| `store` | string | The IndexedDB name `save()` and `DB.load()` use (see [Persistence](#oo1-api-main-thread-indexeddb-blob)). |
 
-Only **one** of `key`, `textkey`, or `hexkey` may be provided.  An
-exception is thrown if more than one is set.  The key pragma is executed
-immediately after opening, before any VFS post-open callbacks run.
+Only **one** of `key`, `textkey`, or `hexkey` may be given; more throws.
+A raw key of any length but 32 or 48 bytes throws (SQLCipher itself would
+silently treat a malformed raw key as a passphrase).  The key is applied
+immediately after opening.  An open that fails -- no such file under
+`w` or `r`, no such VFS -- throws, and leaves nothing open.
 
-The read-only `pointer` property holds the underlying `sqlite3*` WASM
-pointer.  It becomes `undefined` after `close()`.
+The `pointer` property holds the underlying `sqlite3*` WASM pointer.  It
+becomes `undefined` after `close()`.  `filename` holds the name it was
+opened with.
 
 ---
 
@@ -67,14 +78,15 @@ pointer.  It becomes `undefined` after `close()`.
 ### DB.prototype.exec(sql, options)
 ### DB.prototype.exec(options)
 
-Executes one or more SQL statements.  By default returns `this` (the DB
-object), enabling chaining.
+Executes every SQL statement in `sql`, in order.  By default returns
+`this` (the DB object), enabling chaining.  A statement that fails throws
+with SQLite's message; the statements before it have run.
 
 ```js
 // Simple string form
-db.exec("CREATE TABLE t (a TEXT, b REAL)");
+db.exec("CREATE TABLE t (a TEXT, b REAL); CREATE INDEX t_b ON t (b)");
 
-// With bindings (applied to the first bindable statement)
+// With bindings (applied to the first statement that has parameters)
 db.exec("INSERT INTO t VALUES (?, ?)", { bind: ["hello", 3.14] });
 
 // Full options form
@@ -93,30 +105,28 @@ var rows = db.exec({
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `sql` | string \| Uint8Array \| string[] | SQL to execute. Arrays are concatenated without separators. |
-| `bind` | any | Value(s) for the first bindable statement. Accepts the same types as `Stmt.bind()`. |
-| `callback` | function(row, stmt) | Called for each result row. Return `false` to stop iteration. |
-| `rowMode` | string \| integer | Shape of the first callback argument: `"array"`, `"object"`, `"stmt"`, a 0-based column index, or `"$columnName"`. Default: `"array"`. |
-| `resultRows` | array | If provided, each result row is pushed here. |
-| `columnNames` | array | If provided, column names are stored here before the first row. |
+| `sql` | string \| string[] \| Uint8Array | SQL to execute. Arrays are joined without separators; bytes are UTF-8. |
+| `bind` | any | Value(s) for the first statement that has parameters. Accepts the same types as `Stmt.bind()`. |
+| `callback` | function(row, stmt) | Called for each result row of every statement that has result columns. Returning `false` stops: no more rows, and no more statements. |
+| `rowMode` | string \| integer | Shape of each row: `"array"`, `"object"`, `"stmt"` (the `Stmt` itself, callback only), a 0-based column index, or `"$columnName"` (that column's value). Default: `"array"`. |
+| `resultRows` | array | If provided, each result row is pushed here. Throws with `rowMode: "stmt"`. |
+| `columnNames` | array | If provided, emptied and filled with the column names of the first statement that has result columns. |
 | `saveSql` | array | If provided, the SQL text of each executed statement is appended. |
-| `returnValue` | string | What `exec()` returns: `"this"` (default), `"resultRows"`, or `"saveSql"`. |
+| `returnValue` | string | What `exec()` returns: `"this"` (default), `"resultRows"`, or `"saveSql"` (each creates its array if not given). |
 
 ---
 
 ### DB.prototype.prepare(sql)
 
-Compiles SQL into a prepared statement.  Returns a `Stmt` object.  This
-is the only way to create `Stmt` instances.  Throws if the SQL is empty
-or invalid.
+Compiles the first statement in `sql` into a prepared statement and
+returns a `Stmt` object.  This is the only way to create `Stmt`
+instances.  Throws if `sql` holds no statement or is invalid.  `sql` may
+be a string, an array of strings (joined without separators), or a
+`Uint8Array` of UTF-8.
 
 ```js
 var stmt = db.prepare("SELECT a, b FROM t WHERE b > ?");
 ```
-
-The `sql` argument may be a string, a `Uint8Array` of SQL bytes, a WASM
-pointer to a NUL-terminated C string, or an array of strings
-(concatenated without separators).
 
 ---
 
@@ -128,8 +138,8 @@ finalize it.  The optional `bind` argument is passed to `Stmt.bind()`.
 #### DB.prototype.selectValue(sql [, bind [, asType]])
 
 Returns the value of the first column of the first result row, or
-`undefined` if there are no results.  The optional `asType` is a
-`SQLITE_*` type constant to coerce the result.
+`undefined` if there are no results.  The optional `asType` coerces the
+result, as in `Stmt.get(columnIndex, asType)`.
 
 ```js
 var count = db.selectValue("SELECT count(*) FROM t");
@@ -219,33 +229,61 @@ db.savepoint(function(db) {
 
 ---
 
-### DB.prototype.changes(total, sixtyFour)
+### DB.prototype.changes(total)
 
-Returns the number of rows changed by the most recent statement.
-
-| Argument | Default | Effect |
-|----------|---------|--------|
-| `total` | `false` | If `true`, returns `sqlite3_total_changes()` instead. |
-| `sixtyFour` | `false` | If `true`, uses the 64-bit variant (requires BigInt support in the build). |
+Returns the number of rows changed by the most recent statement, or, if
+`total` is `true`, `sqlite3_total_changes()`: every row changed since the
+database was opened.
 
 ---
 
 ### DB.prototype.createFunction(name, xFunc [, options])
+### DB.prototype.createFunction(name, options)
 ### DB.prototype.createFunction(options)
 
-Registers a user-defined function accessible from SQL.  Supports scalar,
-aggregate, and window functions.  Returns `this`.
+Registers a function callable from SQL: a scalar function (`xFunc`), an
+aggregate (`xStep` and `xFinal`), or a window function (`xStep`,
+`xFinal`, `xValue` and `xInverse`).  Registering a name again replaces
+it.  Returns `this`.
 
 ```js
 db.createFunction("double_it", function(pCtx, val) {
   return val * 2;
 });
 db.selectValue("SELECT double_it(21)"); // 42
+
+var sums = {};
+db.createFunction("sumsq", {
+  xStep:  function(pCtx, v) { sums[pCtx] = (sums[pCtx] || 0) + v * v; },
+  xFinal: function(pCtx) { var r = sums[pCtx] || 0; delete sums[pCtx]; return r; }
+});
+db.selectValues("SELECT sumsq(v) FROM t GROUP BY g");
 ```
 
-See the source for the full options object shape (`xFunc`, `xStep`,
-`xFinal`, `xValue`, `xInverse`, `arity`, `deterministic`, `directOnly`,
-`innocuous`).
+Each callback is called as `(pCtx, ...args)`.  The SQL arguments arrive
+as `null`, a number, a string, or a `Uint8Array` (BLOB).  For a scalar
+function, `pCtx` is the `sqlite3_context*`.  For an aggregate or window
+function, `pCtx` is a number that is the same for every call made for one
+group, including `xFinal` -- key per-group state by it, and drop that
+state in `xFinal`.  (Upstream passes the raw `sqlite3_context*`, which
+SQLite changes between `xStep` and `xFinal`, and points to
+`sqlite3_aggregate_context()`, which the shim does not expose.)
+
+The return value of `xFunc`, `xValue` and `xFinal` is the SQL result,
+converted as `Stmt.bind()` converts values; `xStep`'s and `xInverse`'s
+are ignored.  A callback that throws makes the SQL statement fail with
+the exception's message.
+
+**Options** (the `options` object, or the single argument with `name`):
+
+| Property | Description |
+|----------|-------------|
+| `name` | The SQL name (single-argument form). |
+| `xFunc` | Scalar function. Cannot be combined with the others. |
+| `xStep`, `xFinal` | Aggregate function: called per row, then once per group for the result. |
+| `xValue`, `xInverse` | With `xStep` and `xFinal`, a window function: the current result, and the removal of a row leaving the window. Both or neither. |
+| `arity` | Number of SQL arguments; `-1` for any. Default: the callback's `length` minus 1 (for `pCtx`), or `-1` for a callback declared with no parameters. |
+| `deterministic`, `directOnly`, `innocuous` | Set `SQLITE_DETERMINISTIC`, `SQLITE_DIRECTONLY`, `SQLITE_INNOCUOUS`. |
 
 ---
 
@@ -259,51 +297,56 @@ Throws if the database has been closed.  Returns `this`.
 
 ### DB.prototype.close()
 
-Finalizes all open statements and closes the database.  A no-op if
-already closed.  After calling `close()`, the `pointer` property
-becomes `undefined`.
+Finalizes all of its open statements (their `pointer` becomes
+`undefined`) and closes the database.  A no-op if already closed.  After
+`close()`, the `pointer` property is `undefined`.
 
-If `this.onclose.before` and/or `this.onclose.after` are functions, they
-are called around the close operation (exceptions are silently ignored).
+`this.onclose.before` and `this.onclose.after` are called with the DB
+before and after the close.  Each may be a function or an array of
+functions; one that throws is ignored, and the close goes on.  Both
+start as empty arrays.
 
 ### DB.prototype.checkRc(resultCode)
 
-Throws an `SQLite3Error` if `resultCode` is non-zero, using
-`sqlite3_errmsg()` for the error message.  Returns `this` on success.
+Throws an `Error` with `sqlite3_errmsg()` if `resultCode` is non-zero.
+Returns `this` on success.
 
 ### DB.prototype.dbFilename(dbName)
 
 Returns `sqlite3_db_filename()` for the given database name (default
-`"main"`).
+`"main"`): `""` for an in-memory or temporary database, `null` if no
+database has that name.
 
 ### DB.prototype.dbName(dbNumber)
 
-Returns the name of the given 0-based attached database (default `0`).
+Returns the name of the given 0-based database (default `0`): `0` is
+`"main"`, `1` is `"temp"`, attached databases follow.  `null` if there
+is none.
 
 ### DB.prototype.dbVfsName(dbName)
 
-Returns the VFS name string for the given attached database.
+Returns the name of the VFS the given database (default `"main"`) uses.
 
 ### DB.prototype.openStatementCount()
 
-Returns the number of `Stmt` objects currently open on this DB (only
-those created via `prepare()`).
+Returns the number of `Stmt` objects open on this DB (created by
+`prepare()`, not yet finalized).
 
 ---
 
 ## Stmt
 
-`Stmt` objects are created exclusively via `DB.prepare()`.  Calling the
-`Stmt` constructor directly throws.
+`Stmt` objects are created only by `DB.prepare()`; the class is not
+exported.
 
 ### Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `pointer` | number \| undefined | Read-only. The `sqlite3_stmt*` WASM pointer. `undefined` after `finalize()`. |
-| `db` | DB | The parent DB that created this statement. |
-| `columnCount` | number | Read-only. Number of result columns (`sqlite3_column_count()`). |
-| `parameterCount` | number | Read-only. Number of bindable parameters (`sqlite3_bind_parameter_count()`). |
+| `pointer` | number \| undefined | The `sqlite3_stmt*` WASM pointer. `undefined` after `finalize()`. |
+| `db` | DB | The DB that created this statement. |
+| `columnCount` | number | Number of result columns (`sqlite3_column_count()`). |
+| `parameterCount` | number | Number of bindable parameters (`sqlite3_bind_parameter_count()`). |
 
 ---
 
@@ -316,17 +359,21 @@ Binds one or more values to the statement's parameters.  Returns `this`.
 
 **Single value (1 arg):** binds to parameter index 1.
 
-**Two arguments:** `index` is a 1-based integer or a named parameter
-string (e.g. `"$name"`, `":name"`, `"@name"`).
+**Two arguments:** `index` is a 1-based integer or a parameter name,
+with its prefix (e.g. `"$name"`, `":name"`, `"@name"`).
 
 **Array:** each element is bound at its array-index + 1.
 
-**Object:** each key is treated as a named parameter (must include the
-prefix, e.g. `{$a: 1, $b: 2}`).
+**Object:** each key is a parameter name, with its prefix
+(e.g. `{$a: 1, ":b": 2}`).
 
-**Bindable types:** `null`, `number`, `string`, `boolean` (bound as
-0/1), `BigInt` (if enabled), `Uint8Array` (bound as blob; for other typed
-arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).  Passing `undefined` is a no-op.
+A name the statement does not have throws.
+
+**Bindable types:** `null` and `undefined` (bound as NULL), `number` (an
+integer within 32 bits as INTEGER, anything else as REAL), `string`,
+`boolean` (bound as 0/1), `Uint8Array` (bound as blob; for other typed
+arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).  Anything else,
+including a `BigInt`, binds as its `String()` text.
 
 ---
 
@@ -334,7 +381,7 @@ arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).  Passing `undefined` is 
 
 Steps the statement.  Returns `true` if a row of data is available (the
 `get()` family becomes legal), `false` if the statement is done.  Throws
-on error.
+on error, with SQLite's message.
 
 ### Stmt.prototype.stepFinalize()
 
@@ -371,33 +418,35 @@ Returns the current row as a plain object (keys = column names).
 ### Stmt.prototype.get(columnIndex)
 
 Returns the value at the given 0-based column index, with the type
-auto-detected from `sqlite3_column_type()`.
+auto-detected from `sqlite3_column_type()`: `null`, a number, a string,
+or a `Uint8Array` for a blob.
 
 ### Stmt.prototype.get(columnIndex, asType)
 
-Returns the value at the given column, coerced to the given
-`SQLITE_*` type constant (`SQLITE_INTEGER`, `SQLITE_FLOAT`,
-`SQLITE_TEXT`, `SQLITE_BLOB`).
+Returns the value at the given column, coerced to `asType`, given as the
+`SQLITE_*` type code: `1` (`SQLITE_INTEGER`), `2` (`SQLITE_FLOAT`), `3`
+(`SQLITE_TEXT`), or `4` (`SQLITE_BLOB`).  A NULL column is `null` whatever
+the type; another code throws.
 
-Blobs are returned as `Uint8Array` instances.
+Integers are read as 32-bit (`sqlite3_column_int()`).
 
 ---
 
 ### Stmt.prototype.getInt(columnIndex)
 
-Equivalent to `get(columnIndex, SQLITE_INTEGER)`.
+Equivalent to `get(columnIndex, 1)`.
 
 ### Stmt.prototype.getFloat(columnIndex)
 
-Equivalent to `get(columnIndex, SQLITE_FLOAT)`.
+Equivalent to `get(columnIndex, 2)`.
 
 ### Stmt.prototype.getString(columnIndex)
 
-Equivalent to `get(columnIndex, SQLITE_TEXT)`.
+Equivalent to `get(columnIndex, 3)`.
 
 ### Stmt.prototype.getBlob(columnIndex)
 
-Equivalent to `get(columnIndex, SQLITE_BLOB)`.  Returns a `Uint8Array`.
+Equivalent to `get(columnIndex, 4)`.  Returns a `Uint8Array`.
 
 ### Stmt.prototype.getJSON(columnIndex)
 
@@ -420,8 +469,9 @@ are appended to it and it is returned.
 ### Stmt.prototype.reset(alsoClearBindings)
 
 Resets the statement for re-execution.  If `alsoClearBindings` is truthy,
-also calls `clearBindings()`.  Returns `this`.  Throws on error
-(including the `INSERT ... RETURNING` lock case).
+also calls `clearBindings()`.  Returns `this`.  Throws if
+`sqlite3_reset()` reports an error -- which it does after a failed
+`step()`, repeating that error.
 
 ### Stmt.prototype.clearBindings()
 
@@ -438,22 +488,25 @@ finalized.  After this call, most methods will throw.
 ### Stmt.prototype.bindAsBlob(value)
 ### Stmt.prototype.bindAsBlob(index, value)
 
-Like `bind()` but forces the BLOB binding mechanism.  The value must be a
-string, `null`/`undefined`, or a typed array.
+Like `bind()` but forces the BLOB binding mechanism.  `index` is as in
+`bind()`.  The value must be a string (bound as its UTF-8 bytes),
+`null`/`undefined` (bound as NULL), or a typed array; anything else
+throws.
 
 ### Stmt.prototype.getParamIndex(name)
 
-Returns the 1-based bind index for the given named parameter, or `0` if
-not found.
+Returns the 1-based bind index for the given named parameter (with its
+prefix), or `0` if not found.
 
 ### Stmt.prototype.getParamName(index)
 
-Returns the name of the given 1-based bind parameter, or `null`.
+Returns the name of the given 1-based bind parameter, with its prefix,
+or `null` if it has none (`?`) or there is no such index.
 
 ### Stmt.prototype.isBusy()
 
-Returns `true` if the statement has been stepped but not yet reset or
-finalized.
+Returns `true` if the statement has been stepped to a row but not yet
+reset, finalized, or stepped past its last row.
 
 ### Stmt.prototype.isReadOnly()
 
@@ -465,13 +518,14 @@ Returns `true` if the statement makes no direct changes to the database.
 
 ```html
 <script src="sqlcipher.js"></script>
+<script src="sqlcipher-oo1.js"></script>
 <script>
 (async function() {
   // 1. Load the WASM module
-  var sqlite3 = await initSqlcipher();
+  var Module = await initSqlcipher();
 
   // 2. Open an encrypted in-memory database
-  var db = new sqlite3.oo1.DB({
+  var db = new DB(Module, {
     filename: ":memory:",
     key: "correct-horse-battery-staple"
   });
@@ -483,8 +537,8 @@ Returns `true` if the statement makes no direct changes to the database.
     bind: ["temp_kitchen", 22.5, 1710000000]
   });
   db.exec({
-    sql:  "INSERT INTO sensors VALUES (?, ?, ?)",
-    bind: ["humidity", 0.65, 1710000002]
+    sql:  "INSERT INTO sensors VALUES ($id, $value, $ts)",
+    bind: {$id: "humidity", $value: 0.65, $ts: 1710000002}
   });
 
   // 4. Query with select shortcuts
@@ -751,19 +805,20 @@ await db.close();  // this now shreds instead of saving
 
 ## Differences from official sqlite3 WASM oo1
 
-| Feature | Official oo1 | SQLCipher WASM oo1 |
+| Feature | Official oo1 | SQLCipher WASM oo1 shim |
 |---------|-------------|-------------------|
-| Encryption | Not available (plain SQLite) | `key`, `textkey`, `hexkey` constructor options via SQLCipher / LibreSSL |
-| `OpfsDb` subclass | Available | Not yet implemented |
-| `JsStorageDb` subclass | Available (main thread) | Available (main thread) |
-| `createFunction()` | Full support | Full support |
-| OPFS SAH Pool VFS | Available | Not yet implemented |
-| Worker1 API | Available | Not yet implemented |
-| `PRAGMA key` | N/A | Applied automatically when `key`/`textkey`/`hexkey` is passed to the constructor; can also be run manually via `exec("PRAGMA key='...'")`  |
+| Access | `sqlite3.oo1.DB` | global `DB`, with the module as the first constructor argument |
+| Encryption | Not available (plain SQLite) | `key`, `textkey`, `hexkey` constructor options (SQLCipher / LibreSSL); a string `key` is a passphrase |
+| Errors | `SQLite3Error` | `Error`, with SQLite's message |
+| `pCtx` for aggregates | raw `sqlite3_context*`; state via `sqlite3_aggregate_context()` | a per-group key (see `createFunction`) |
+| 64-bit values | `BigInt` binding, `changes(total, true)` | not in this build: `get()` reads integers as 32-bit, a `BigInt` binds as text |
+| SQL as a WASM pointer | Accepted | Not accepted |
+| `capi`, `wasm`, `Stmt` constructor | Exposed | Not exposed |
+| `OpfsDb`, `JsStorageDb`, kvvfs (`":localStorage:"`) | Available | Not implemented; for persistence use `save()` / `DB.load()`, or the unified API |
+| OPFS SAH Pool VFS, Worker1 API | Available | Not implemented; the unified API runs in a worker |
+| Persistence | Through the VFS | `exportDatabase()`, `save()`, `DB.load()` (whole file, IndexedDB) |
 
-The core `DB` and `Stmt` classes are functionally identical to upstream.
-The only addition is the key-application logic that runs immediately
-after `sqlite3_open_v2()`, before any VFS post-open callbacks.  This
-means encrypted databases work transparently -- the rest of the oo1 API
-(exec, prepare, select shortcuts, transactions) behaves exactly as
-documented upstream.
+Otherwise `DB` and `Stmt` follow upstream: exec, prepare, the select
+shortcuts, transactions, binding, stepping and `get()` behave as
+documented upstream, with the key applied right after
+`sqlite3_open_v2()`, before anything else runs.
