@@ -311,12 +311,15 @@ async function init() {
     bind_int:   Module.cwrap("wasm_stmt_bind_int",      null,      ["number", "number", "number"]),
     bind_dbl:   Module.cwrap("wasm_stmt_bind_double",   null,      ["number", "number", "number"]),
     bind_null:  Module.cwrap("wasm_stmt_bind_null",     null,      ["number", "number"]),
+    bind_blob:  Module.cwrap("wasm_stmt_bind_blob",     null,      ["number", "number", "number", "number"]),
     columns:    Module.cwrap("wasm_stmt_columns",       "number",  ["number"]),
     colname:    Module.cwrap("wasm_stmt_colname",       "string",  ["number", "number"]),
     coltype:    Module.cwrap("wasm_stmt_coltype",       "number",  ["number", "number"]),
     col_int:    Module.cwrap("wasm_stmt_int",           "number",  ["number", "number"]),
     col_dbl:    Module.cwrap("wasm_stmt_double",        "number",  ["number", "number"]),
     col_text:   Module.cwrap("wasm_stmt_text",          "string",  ["number", "number"]),
+    col_blob:   Module.cwrap("wasm_stmt_blob",          "number",  ["number", "number"]),
+    col_bytes:  Module.cwrap("wasm_stmt_bytes",         "number",  ["number", "number"]),
     opfs_init:  Module.cwrap("sqlite3_opfs_init",       "number",  [])
   };
 }
@@ -334,8 +337,17 @@ function _bind(stmt, args) {
       else _api.bind_dbl(stmt, idx, v);
     }
     else if (typeof v === "boolean")         _api.bind_int(stmt, idx, v ? 1 : 0);
+    else if (v instanceof Uint8Array)        _bindBlob(stmt, idx, v);
     else                                     _api.bind_text(stmt, idx, String(v));
   }
+}
+
+function _bindBlob(stmt, idx, bytes) {
+  // The C helper binds SQLITE_TRANSIENT (SQLite copies), so the buffer is freed at once.
+  var p = bytes.length ? Module._malloc(bytes.length) : 0;
+  if (p) Module.HEAPU8.set(bytes, p);
+  _api.bind_blob(stmt, idx, p, bytes.length);
+  if (p) Module._free(p);
 }
 
 function _query(sql, bind) {
@@ -352,6 +364,10 @@ function _query(sql, bind) {
       if      (t === 1) row[names[j]] = _api.col_int(stmt, j);
       else if (t === 2) row[names[j]] = _api.col_dbl(stmt, j);
       else if (t === 3) row[names[j]] = _api.col_text(stmt, j);
+      else if (t === 4) {
+        var p = _api.col_blob(stmt, j), n = _api.col_bytes(stmt, j);
+        row[names[j]] = Module.HEAPU8.slice(p, p + n);
+      }
       else              row[names[j]] = null;
     }
     rows.push(row);

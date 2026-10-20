@@ -325,8 +325,8 @@ string (e.g. `"$name"`, `":name"`, `"@name"`).
 prefix, e.g. `{$a: 1, $b: 2}`).
 
 **Bindable types:** `null`, `number`, `string`, `boolean` (bound as
-0/1), `BigInt` (if enabled), `Uint8Array` / `Int8Array` / `ArrayBuffer`
-(bound as blob).  Passing `undefined` is a no-op.
+0/1), `BigInt` (if enabled), `Uint8Array` (bound as blob; for other typed
+arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).  Passing `undefined` is a no-op.
 
 ---
 
@@ -562,8 +562,8 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array. |
-| `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). |
+| `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array; a `Uint8Array` binds as a BLOB. |
+| `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). BLOB columns are `Uint8Array`s. |
 | `flush()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |

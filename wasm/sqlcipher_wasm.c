@@ -84,6 +84,12 @@ void wasm_stmt_bind_null(sqlite3_stmt *stmt, int i) {
     sqlite3_bind_null(stmt, i);
 }
 
+void wasm_stmt_bind_blob(sqlite3_stmt *stmt, int i, const void *p, int n) {
+    /* sqlite3_bind_blob with a NULL pointer binds NULL; an empty array must stay a BLOB. */
+    if (n == 0) sqlite3_bind_zeroblob(stmt, i, 0);
+    else sqlite3_bind_blob(stmt, i, p, n, SQLITE_TRANSIENT);
+}
+
 int wasm_stmt_bind_parameter_count(sqlite3_stmt *stmt) {
     return sqlite3_bind_parameter_count(stmt);
 }
@@ -112,6 +118,15 @@ double wasm_stmt_double(sqlite3_stmt *stmt, int i) {
 
 const char *wasm_stmt_text(sqlite3_stmt *stmt, int i) {
     return (const char *)sqlite3_column_text(stmt, i);
+}
+
+/* Call wasm_stmt_blob before wasm_stmt_bytes, so the size is of the blob form. */
+const void *wasm_stmt_blob(sqlite3_stmt *stmt, int i) {
+    return sqlite3_column_blob(stmt, i);
+}
+
+int wasm_stmt_bytes(sqlite3_stmt *stmt, int i) {
+    return sqlite3_column_bytes(stmt, i);
 }
 
 /* ── SQLCipher key ─────────────────────────────────────────── */
