@@ -12,10 +12,15 @@ env:
   # The upstream SQLCipher release this fork is based on. Bump it on each
   # upstream merge (CONTRIBUTING "Syncing with upstream").
   UPSTREAM_TAG: v4.16.0
+  # The one place for LibreSSL's version and the SHA-256 of its release
+  # tarball. The hash matches the SHA256 file OpenBSD publishes for 4.2.1.
+  # Bump both together (CONTRIBUTING "Pinned and floating inputs").
+  LIBRESSL_VERSION: 4.2.1
+  LIBRESSL_SHA256: 6d5c2f58583588ea791f4c8645004071d00dfa554a5bf788a006ca1eb5abd70b
 
 jobs:
   upstream-diff:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +46,7 @@ jobs:
       matrix:
         include:
           # Debian (glibc) — works on Debian, Ubuntu, RHEL, etc.
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             container: debian:bookworm
             artifact: libsqlcipher-linux-glibc-x64.a
             deps: apt-get update && apt-get install -y gcc make cmake tcl tcl-dev curl ca-certificates
@@ -50,12 +55,12 @@ jobs:
             artifact: libsqlcipher-linux-glibc-arm64.a
             deps: apt-get update && apt-get install -y gcc make cmake tcl tcl-dev curl ca-certificates
           # Alpine (musl) — works on Alpine, Docker scratch, etc.
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             container: alpine:3.19
             artifact: libsqlcipher-linux-musl-x64.a
             deps: apk add gcc make cmake musl-dev tcl tcl-dev curl
           # macOS
-          - os: macos-latest
+          - os: macos-26
             container: ""
             artifact: libsqlcipher-macos-arm64.a
             deps: ""
@@ -71,8 +76,13 @@ jobs:
 
       - name: Download and build LibreSSL
         run: |
-          curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
-          cd libressl-4.2.1
+          # Download to a file and check it before unpacking: through a pipe,
+          # a changed or truncated tarball would be built without complaint.
+          t=libressl-$LIBRESSL_VERSION.tar.gz
+          curl -fsSL -o "$t" https://github.com/libressl/portable/releases/download/v$LIBRESSL_VERSION/$t
+          echo "$LIBRESSL_SHA256  $t" | sha256sum -c -
+          tar xzf "$t"
+          cd libressl-$LIBRESSL_VERSION
           mkdir build && cd build
           cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -155,7 +165,7 @@ jobs:
           cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
 
   wasm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -171,8 +181,13 @@ jobs:
 
       - name: Download and build LibreSSL (native + WASM)
         run: |
-          curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
-          cd libressl-4.2.1
+          # Download to a file and check it before unpacking: through a pipe,
+          # a changed or truncated tarball would be built without complaint.
+          t=libressl-$LIBRESSL_VERSION.tar.gz
+          curl -fsSL -o "$t" https://github.com/libressl/portable/releases/download/v$LIBRESSL_VERSION/$t
+          echo "$LIBRESSL_SHA256  $t" | sha256sum -c -
+          tar xzf "$t"
+          cd libressl-$LIBRESSL_VERSION
           mkdir build && cd build
           cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
             -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -211,8 +226,7 @@ jobs:
       - name: Install Playwright
         run: |
           cd tests/wasm
-          npm init -y > /dev/null
-          npm install playwright
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: REQ1/WASM-1 run WASM tests
@@ -244,7 +258,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [upstream-diff, native, wasm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

@@ -131,7 +131,9 @@ reject wrong key).
 ### Install LibreSSL
 
 ```bash
-curl -sL https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz | tar xz
+curl -fsSLO https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz
+sha256sum libressl-4.2.1.tar.gz   # must equal LIBRESSL_SHA256 in .github/workflows/build-test.yml
+tar xzf libressl-4.2.1.tar.gz
 cd libressl-4.2.1 && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
   -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
