@@ -598,6 +598,16 @@
     await db.close();
   });
 
+  await test("REQ2/ENC-2 no key means an unencrypted database", async function() {
+    var db = await SQLCipher.open({filename: "/t15.db"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES (?)", ["plain"]);
+    var bytes = await db.export();
+    var header = new TextDecoder().decode(bytes.subarray(0, 16));
+    assertEqual(header, "SQLite format 3\u0000", "file header");
+    await db.close();
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
