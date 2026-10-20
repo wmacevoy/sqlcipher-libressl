@@ -67,7 +67,7 @@ To run the browser demo from a release instead:
 
 ```sh
 cd examples/web
-gh release download v1.0.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v2.0.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000     # open http://localhost:8000
 ```
 
