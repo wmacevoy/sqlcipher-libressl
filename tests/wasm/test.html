@@ -490,6 +490,80 @@
     db.close();
   });
 
+  // ── 64-bit integers ────────────────────────────────────────
+  // Safe integers come back as numbers; beyond 2^53 - 1, as BigInts. Compared as
+  // strings, because JSON.stringify (in assertEqual's message) throws on a BigInt.
+
+  var INT_CASES = [
+    {v: Math.pow(2, 40), s: "1099511627776"},
+    {v: -Math.pow(2, 40), s: "-1099511627776"},
+    {v: Number.MAX_SAFE_INTEGER, s: "9007199254740991"},
+    {v: BigInt("9007199254740993"), s: "9007199254740993"},
+    {v: BigInt("9223372036854775807"), s: "9223372036854775807"},
+    {v: BigInt("-9223372036854775808"), s: "-9223372036854775808"}
+  ];
+
+  function assertInt(got, want, msg) {
+    var big = !Number.isSafeInteger(Number(want));
+    assertEqual(typeof got, big ? "bigint" : "number", msg + " type of " + want);
+    assertEqual(String(got), want, msg);
+  }
+
+  await test("REQ5/INT-1 64-bit integers through the unified API", async function() {
+    var db = await SQLCipher.open({filename: "/t12.db", key: "k12"});
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v)");
+    for (var i = 0; i < INT_CASES.length; i++)
+      await db.exec("INSERT INTO t VALUES (?, ?)", [i, INT_CASES[i].v]);
+    var rows = await db.select("SELECT v, typeof(v) AS ty, CAST(v AS TEXT) AS s FROM t ORDER BY id");
+    for (var j = 0; j < INT_CASES.length; j++) {
+      assertEqual(rows[j].ty, "integer", "stored as INTEGER: " + INT_CASES[j].s);
+      assertEqual(rows[j].s, INT_CASES[j].s, "stored exactly");
+      assertInt(rows[j].v, INT_CASES[j].s, "read back");
+    }
+    var threw = false;
+    try { await db.exec("INSERT INTO t VALUES (99, ?)", [BigInt("9223372036854775808")]); }
+    catch (e) { threw = /64 bits/.test(e.message); }
+    assert(threw, "a BigInt beyond 64 bits rejects");
+    await db.close();
+  });
+
+  await test("REQ5/INT-1 64-bit integers through the oo1 shim", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v)");
+    var ins = db.prepare("INSERT INTO t VALUES (?, ?)");
+    for (var i = 0; i < INT_CASES.length; i++) ins.bind([i, INT_CASES[i].v]).stepReset();
+    assertThrows(function() { ins.bind(2, BigInt("-9223372036854775809")); }, /64 bits/, "beyond 64 bits");
+    ins.finalize();
+
+    var sel = db.prepare("SELECT v, typeof(v), CAST(v AS TEXT) FROM t ORDER BY id");
+    for (var j = 0; sel.step(); j++) {
+      var want = INT_CASES[j].s;
+      assertEqual(sel.get(1), "integer", "stored as INTEGER: " + want);
+      assertEqual(sel.get(2), want, "stored exactly");
+      assertInt(sel.get(0), want, "get(ndx)");
+      assertInt(sel.get([])[0], want, "get([])");
+      assertInt(sel.getInt(0), want, "getInt");
+      assertInt(sel.get(0, 1), want, "get(ndx, INTEGER)");
+    }
+    assertEqual(j, INT_CASES.length, "rows");
+    sel.finalize();
+    assertInt(db.selectValue("SELECT 9223372036854775807"), "9223372036854775807", "selectValue");
+    assertInt(db.selectValue("SELECT '-9223372036854775808'", undefined, 1), "-9223372036854775808",
+              "TEXT as INTEGER");
+
+    db.createFunction("echo", function(pCtx, v) { return v; });
+    db.createFunction("plus1", function(pCtx, v) { return v + BigInt(1); });
+    for (var k = 0; k < INT_CASES.length; k++) {
+      var s = INT_CASES[k].s;
+      assertEqual(db.selectValue("SELECT typeof(echo(" + s + "))"), "integer", "function result type " + s);
+      assertInt(db.selectValue("SELECT echo(" + s + ")"), s, "function argument and result");
+    }
+    assertInt(db.selectValue("SELECT plus1(CAST(? AS INTEGER))", [BigInt("9007199254740992")]),
+              "9007199254740993", "BigInt arithmetic in a function");
+    db.close();
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
