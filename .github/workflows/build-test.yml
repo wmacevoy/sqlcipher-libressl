@@ -77,12 +77,6 @@ jobs:
             libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
           ./example_basic
 
-      - name: Run SQLCipher test suite
-        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
-        run: |
-          make testfixture
-          cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
-
       - name: Rename artifact
         run: cp libsqlite3.a ${{ matrix.artifact }}
 
@@ -90,6 +84,20 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
+
+      # Last, because it reconfigures: sqlcipher.test needs -DSQLCIPHER_TEST
+      # and FTS5 (upstream's test recipe), which must not go into the shipped .a.
+      - name: Run SQLCipher test suite
+        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
+        run: |
+          # Without pipefail the step's status is tail's, so test failures pass CI.
+          set -o pipefail
+          make distclean
+          ./configure --with-tempstore=yes --enable-fts5 \
+            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_TEST -I$HOME/libressl/include" \
+            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
+          make testfixture
+          cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
 
   wasm:
     runs-on: ubuntu-latest

@@ -51,7 +51,11 @@ gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
   libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 ./basic
 
-# Full TCL test suite
+# Full TCL test suite — needs its own configure (test-only flags, never ship this build)
+make distclean
+./configure --with-tempstore=yes --enable-fts5 \
+  CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_TEST -I$HOME/libressl/include" \
+  LDFLAGS="$HOME/libressl/lib/libcrypto.a"
 make testfixture
 cd test && ../testfixture sqlcipher.test
 
