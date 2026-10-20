@@ -615,6 +615,33 @@
     await db.close();
   });
 
+  // fail-worker.js answers init or open with an error, and answers pings on a BroadcastChannel
+  // while it runs: a worker that still answers after its open failed was left running.
+  var pings = 0;
+  function workerAnswers(fail) {
+    var channel = new BroadcastChannel("worker-alive-" + fail);
+    var token = "ping " + (++pings);
+    return new Promise(function(resolve) {
+      channel.onmessage = function(e) { if (e.data && e.data.pong === token) resolve(true); };
+      setTimeout(function() { resolve(false); }, 1000);
+      channel.postMessage({ping: token});
+    }).finally(function() { channel.close(); });
+  }
+
+  function failUrl(fail) { return "fail-worker.js?fail=" + fail + (BACKEND ? "&backend=" + BACKEND : ""); }
+
+  await test("REQ1/API-1 an open whose init or open fails rejects and ends its worker", async function() {
+    var db = await SQLCipher.open({filename: "/t25.db", key: "k25", workerUrl: failUrl("none")});
+    assert(await workerAnswers("none"), "control: the worker of an open handle answers");
+    await db.close();
+    var fails = ["init", "open"];
+    for (var i = 0; i < fails.length; i++) {
+      await assertRejects(SQLCipher.open({filename: "/t25.db", key: "k25", workerUrl: failUrl(fails[i])}),
+                          new RegExp(fails[i] + " refused"), fails[i]);
+      assert(!(await workerAnswers(fails[i])), "the worker of the open whose " + fails[i] + " failed still runs");
+    }
+  });
+
   await test("REQ2/ENC-2 no key means an unencrypted database", async function() {
     var db = await SQLCipher.open({filename: "/t15.db"});
     await db.exec("CREATE TABLE t (x TEXT)");
