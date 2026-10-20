@@ -654,6 +654,149 @@
     }
   });
 
+  // ── REQ1/DUR-2: the worker killed at each write of a transaction ──
+  //
+  // crash-worker.js stops the worker just before VFS write N (main file or journal) and
+  // tells the page, which terminates it. A first run with no kill counts the writes and
+  // records the rows before and after the transaction. Then for each N the same database is
+  // built in a fresh file, the worker is killed at write N, and an ordinary worker reopens
+  // the file: integrity_check must be ok and the rows exactly those before or after.
+
+  var CRASH_KEY = "crash-key";
+  var CRASH_ROWS = "SELECT id, tag, length(pad) AS len FROM t ORDER BY id";
+  var CRASH_SETUP = [
+    "CREATE TABLE t (id INTEGER PRIMARY KEY, tag TEXT, pad BLOB)",
+    "WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 8) " +
+      "INSERT INTO t SELECT i, 'before', zeroblob(1000) FROM c"
+  ];
+
+  function crashEvent(worker, kind) {
+    return new Promise(function(resolve) {
+      worker.addEventListener("message", function(e) {
+        if (e.data && e.data.crash === kind) resolve(e.data);
+      });
+    });
+  }
+
+  function crashCount(worker) {
+    var counted = crashEvent(worker, "count");
+    worker.postMessage({type: "crash-count"});
+    return counted;
+  }
+
+  // Builds the database in filename, runs steps (one exec each) with the kill armed at
+  // write killAt (0: never). Returns {died} if the worker was killed, else {count, before,
+  // after, stepEnds}: stepEnds[j] is the number of writes when step j had finished.
+  async function crashRun(filename, setup, steps, killAt) {
+    var db = await SQLCipher.open({filename: filename, key: CRASH_KEY,
+                                   workerUrl: "crash-worker.js" + WORKER_QUERY});
+    for (var i = 0; i < setup.length; i++) await db.exec(setup[i]);
+    var before = await db.select(CRASH_ROWS);
+    var worker = db._worker;
+    var died = crashEvent(worker, "dying").then(function(d) { worker.terminate(); return d; });
+    worker.postMessage({type: "crash-arm", killAt: killAt});
+    var stepEnds = [];
+    for (var j = 0; j < steps.length; j++) {
+      var d = await Promise.race([died, db.exec(steps[j]).then(function() { return null; })]);
+      if (d) return {died: d};
+      stepEnds.push((await crashCount(worker)).writes);
+    }
+    var after = await db.select(CRASH_ROWS);
+    var count = await crashCount(worker);
+    await db.close();
+    return {count: count, before: before, after: after, stepEnds: stepEnds};
+  }
+
+  // Opens filename with the ordinary worker. On OPFS the killed worker's access handle is
+  // released some time after terminate(), and until then open fails; so retry, ending each
+  // failed attempt's worker, which SQLCipher.open leaves running.
+  async function crashReopen(filename) {
+    var RealWorker = window.Worker;
+    for (var attempt = 1; ; attempt++) {
+      var made = null;
+      window.Worker = function(url) { made = new RealWorker(url); return made; };
+      var opening = SQLCipher.open({filename: filename, key: CRASH_KEY});  // makes its worker at once
+      window.Worker = RealWorker;
+      try {
+        var db = await opening;
+        db.attempts = attempt;
+        return db;
+      } catch (e) {
+        if (made) made.terminate();
+        if (attempt === 50) throw e;
+        await new Promise(function(resolve) { setTimeout(resolve, 100); });
+      }
+    }
+  }
+
+  // Reopens filename; outcome is "ok, before", "ok, after", or what is wrong.
+  async function crashCheck(filename, before, after) {
+    var db = await crashReopen(filename);
+    var outcome;
+    try {
+      var check = await db.select("PRAGMA integrity_check");
+      var integrity = check.map(function(r) { return r.integrity_check; }).join("; ");
+      var rows = JSON.stringify(await db.select(CRASH_ROWS));
+      var state = rows === JSON.stringify(before) ? "before" :
+                  rows === JSON.stringify(after) ? "after" : "neither (" + rows.length + " chars of rows)";
+      outcome = (integrity === "ok" ? "ok" : "integrity_check: " + integrity.slice(0, 200)) + ", " + state;
+    } catch (e) {
+      outcome = "error: " + e.message;
+    }
+    try { await db.close(); } catch (e) {}
+    return {outcome: outcome, attempts: db.attempts};
+  }
+
+  // "db" or "db-journal": which file a write went to, whatever the database is called.
+  function crashFile(name) { return name.slice(name.lastIndexOf(".") + 1); }
+
+  async function crashTest(label, setup, steps) {
+    var base = "/crash-" + label + "-";
+    var clean = await crashRun(base + "0.db", setup, steps, 0);
+    var total = clean.count.writes;
+    assert(total > 0, "the transaction made no writes");
+    assert(JSON.stringify(clean.before) !== JSON.stringify(clean.after), "the transaction changed nothing");
+    var files = {};
+    clean.count.log.forEach(function(w) { files[crashFile(w.name)] = (files[crashFile(w.name)] || 0) + 1; });
+    log("  " + label + ": " + total + " writes " + JSON.stringify(files) +
+        "; the steps end after writes " + clean.stepEnds.join(", "));
+    var bad = [];
+    for (var n = 1; n <= total; n++) {
+      var fn = base + n + ".db";
+      var r = await crashRun(fn, setup, steps, n);
+      assert(r.died, "write " + n + ": the transaction finished without reaching it");
+      var w = clean.count.log[n - 1];
+      assert(crashFile(r.died.name) === crashFile(w.name) && r.died.offset === w.offset && r.died.bytes === w.bytes,
+             "write " + n + " differs from the counting run: " + JSON.stringify(r.died) + " vs " + JSON.stringify(w));
+      var c = await crashCheck(fn, clean.before, clean.after);
+      log("  " + label + " killed before write " + n + "/" + total + " (" + crashFile(w.name) +
+          " @" + w.offset + ", " + w.bytes + " B): " + c.outcome +
+          (c.attempts > 1 ? " [reopened on try " + c.attempts + "]" : ""));
+      if (!/^ok, (before|after)$/.test(c.outcome)) bad.push(n);
+    }
+    assert(bad.length === 0, bad.length + " of " + total + " kill points left the database " +
+           "corrupt or at neither state: before writes " + bad.join(", "));
+  }
+
+  await test("REQ1/DUR-2 worker killed at each write of a one-exec transaction: reopens at its last commit", async function() {
+    await crashTest("one", CRASH_SETUP, [
+      "BEGIN; UPDATE t SET tag = 'after', pad = zeroblob(1200); " +
+      "INSERT INTO t SELECT id + 1000, 'new', zeroblob(1000) FROM t; COMMIT"
+    ]);
+  });
+
+  // The IndexedDB hazard in DESIGN Known hazards: a transaction open across execs, with a
+  // cache small enough to spill uncommitted pages, which the flush after each exec stores.
+  await test("REQ1/DUR-2 worker killed at each write of a transaction across execs: reopens at its last commit", async function() {
+    await crashTest("span", CRASH_SETUP.concat(["PRAGMA cache_size = 2"]), [
+      "BEGIN",
+      "UPDATE t SET tag = 'after', pad = zeroblob(1200) WHERE id <= 4",
+      "UPDATE t SET tag = 'after', pad = zeroblob(1200) WHERE id > 4",
+      "INSERT INTO t SELECT id + 1000, 'new', zeroblob(1000) FROM t",
+      "COMMIT"
+    ]);
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
