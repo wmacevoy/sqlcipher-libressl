@@ -31,6 +31,16 @@ int walseal_register_as(const char *zName, const char *zUnder);
 ** not enciphered (for an unencrypted database). */
 int walseal_key(sqlite3 *db, const char *zDb, const void *key, int nKey);
 
+/* Have walseal take the key for database zDb's WAL headers from xKey each
+** time SQLite starts the WAL over (writes a new WAL header, so no frame of
+** the old WAL is still in use), in place of the key walseal_key gave last.
+** xKey(pArg, aKey, &nKey) fills aKey (room for 64 bytes) and nKey (>= 16),
+** and returns an SQLite result code; an error fails that write.  For a key
+** that changes during a session: the WAL that starts after the change is
+** sealed under the new key.  xKey NULL: stop asking. */
+int walseal_key_source(sqlite3 *db, const char *zDb,
+                       int (*xKey)(void *pArg, unsigned char *aKey, int *pnKey), void *pArg);
+
 #ifdef __cplusplus
 }
 #endif

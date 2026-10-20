@@ -13,7 +13,7 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | unified API | 6 | `wasm/sqlcipher-api.js` | `SQLCipher.open()` → a handle; one worker per handle; each method is one message and one promise | pending requests |
 | oo1 shim | 6 | `wasm/sqlcipher-oo1.js` | sqlite3's oo1 API on the main thread; file in MEMFS; `save()` writes the whole file to IndexedDB | open DB, statements |
 | worker | 5 | `wasm/sqlcipher-worker.js` | answers the message protocol; chooses the backend; keeps the handle table the VFS reads and writes | handle table, current filename and key, IndexedDB buffer |
-| walseal | 4 | `wasm/walseal.c`, `wasm/walseal_sqlcipher.c` | VFS shim over the VFS, the default in the worker: enciphers the `-wal` file's headers in place, passes every other file through; keyed from SQLCipher's derived key | walseal's AES key, per open database |
+| walseal | 4 | `wasm/walseal.c`, `wasm/walseal_sqlcipher.c` | VFS shim over the VFS, the default in the worker: enciphers the `-wal` file's headers in place, passes every other file through; keyed from SQLCipher's derived key, and from its new key for each WAL after a key change | walseal's AES key, per open database |
 | VFS | 4 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker's handle table through `EM_JS` | no |
 | WASM helpers | 4 | `wasm/sqlcipher_wasm.c` | thin `wasm_db_*` / `wasm_stmt_*` wrappers, so JS never manages WASM memory; one set of SQL-function trampolines that call the oo1 shim through `EM_JS` | no |
 | SQLCipher | 3 | `src/` (upstream + the patches), built as `sqlite3.c` | SQLite with page encryption; `sqlite3_key` | SQLite's own |
@@ -140,6 +140,25 @@ Reasons are from the commit messages unless marked *(inferred)*
     lazily when it opens the WAL (the VFS cannot reach the pager's codec from a file; it would need
     a callback and the database handle). With no key (REQ2/ENC-2) there is no codec and the WAL
     passes through: an unencrypted database's pages are in the clear anyway.
+  - *A key changed in a session* (`PRAGMA rekey`, or `key`, `hexkey`, `textkey` and their
+    `re…` forms, through `exec` or `select`) — REQ1/DUR-2, REQ6/ENC-3. All frames of one WAL
+    must be sealed under one key, the one the next `open` derives; SQLCipher applies these
+    pragmas while the statement is prepared, and rekey rewrites every page in one commit. So
+    `walseal_follow_codec` (`wasm/walseal_sqlcipher.c`, run with `walseal_key_from_codec` at
+    open) installs two things: an authorizer that checkpoints (`TRUNCATE`) before a key pragma
+    runs, so its commit starts a new WAL; and a key source walseal calls each time a new WAL
+    starts, which hands it the codec's *write* key (the new key while rekey writes). After every
+    `exec` and `select` the worker calls `walseal_codec_settle`, which checkpoints again if a key
+    pragma ran, so the database file is under the new key and the old key opens nothing. The
+    authorizer refuses a key pragma (SQLite's `not authorized`) inside a transaction, where it
+    cannot checkpoint, and after an `open` whose key could not read the database: SQLite then
+    took the WAL for empty, and a new WAL would overwrite its commits; close and open again with
+    the right key. Rejected: checkpointing and re-keying walseal only after the statement, as
+    first proposed — rekey's own commit would be sealed under the old key, and a crash before
+    the checkpoint would leave a WAL the new key cannot read over pages the old key cannot read,
+    so neither key would open the database; and spotting key pragmas in the SQL text from
+    JavaScript (every statement naming a `key` column would checkpoint). The authorizer replaces
+    any other on the worker's connection; the unified API exposes none.
   - *A key that cannot read the database* (wrong, or none for an encrypted file) still derives a
     walseal key, so the WAL's headers decipher to noise and SQLite takes the WAL for empty. A
     normal close would then checkpoint nothing and delete the WAL, losing its commits. So when
@@ -192,19 +211,27 @@ Reasons are from the commit messages unless marked *(inferred)*
 
 ## Known hazards
 
-From reading the code on 2026-10-20; none of them has been run. Each is a QUEUE item with a test to
-write first. (The first one recorded here, "No journal survives a crash", was confirmed by the
-REQ1/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16.)
+From reading the code on 2026-10-20; none of them has been run unless it says so. Each is a QUEUE
+item with a test to write first. (The first one recorded here, "No journal survives a crash", was
+confirmed by the REQ1/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16; the second,
+"Changing the key inside a session can lose the WAL's commits", is fixed and tested, see
+*Decisions*.)
 
-- **Changing the key inside a session can lose the WAL's commits** (QUEUE #16, from reading the
-  code; untested). walseal's key is fixed when the worker opens the database. `PRAGMA rekey`, or a
-  `PRAGMA key` after a failed first read, changes SQLCipher's key but not walseal's, so frames
-  written afterwards are sealed under a key the next `open` (with the new passphrase) does not
-  derive; if the worker dies before a checkpoint, the next `open` sees no WAL. A database that
-  needs non-default cipher settings (`PRAGMA cipher_compatibility` and the like, given after
-  `open`) fails the read `open` makes, so the worker never switches it to WAL: unless it already
-  is one, its rollback journal stays in memory, as before this change, and DUR-2 does not hold
-  for it.
+- **A worker killed inside the `exec` that changes the key** leaves the database readable under
+  either key (the rekey crash test). Until that `exec` checkpoints, the database file is still
+  under the old key, so the old key opens the state before the change, and closing that
+  connection discards the WAL holding the change and anything after it in the same `exec`. The
+  `exec` never resolved, so nothing acknowledged is lost; once it resolves, only the new key
+  opens the database.
+- **After a key pragma, `import` reopens under the key given to `open`** (from reading the code;
+  untested). The worker keeps that passphrase (`_currentKey`) to reopen the database after
+  `import`; a `PRAGMA rekey` through `exec` does not change it, so `import` of a file under the
+  new key opens it under the old one, and its first read fails.
+- **Non-default cipher settings and the WAL.** A database that needs them (`PRAGMA
+  cipher_compatibility` and the like, given after `open`) fails the read `open` makes, so the
+  worker never switches it to WAL: unless it already is one, its rollback journal stays in
+  memory, and DUR-2 does not hold for it. A key pragma on such a connection is refused (it could
+  not read its database at `open`).
 - **The switch to WAL uses a rollback journal in memory.** The first time a database is opened,
   SQLite writes page 1 to mark it WAL, journaled in memory. Killing a worker cannot tear that one
   write; a power loss might (as below).

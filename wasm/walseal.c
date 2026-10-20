@@ -47,6 +47,7 @@
 #include "walseal.h"
 
 #define WS_FCNTL_KEY  0x5753454c          /* 'WSEL' */
+#define WS_FCNTL_SRC  0x57534b53          /* 'WSKS' */
 #define WS_LHDR       32                  /* WAL header */
 #define WS_FHDR       24                  /* frame header */
 
@@ -65,6 +66,8 @@ struct WsFile {
   EVP_CIPHER_CTX *aes;         /* AES-256 (ECB: the PRP's block cipher) */
   int keyed;
   int plain;                   /* walseal_key(..., NULL, 0): the WAL passes through */
+  int (*xKey)(void*, unsigned char*, int*);   /* walseal_key_source, or 0 */
+  void *pKeyArg;
   WsFile *pNext;               /* open main databases */
   /* WAL */
   WsFile *pMain;
@@ -143,6 +146,18 @@ static int ws_setkey(WsFile *m, const u8 *master, int n){
   }
   OPENSSL_cleanse(k, sizeof(k));
   m->keyed = rc == SQLITE_OK;
+  return rc;
+}
+
+/* A new WAL begins: take the key from the key source, if there is one.  The
+** WAL holds no frames yet, so no header sealed under the old key is left. */
+static int ws_rekey(WsFile *m){
+  u8 k[64];
+  int n = 0, rc;
+  if(!m->xKey) return SQLITE_OK;
+  rc = m->xKey(m->pKeyArg, k, &n);
+  if(rc == SQLITE_OK) rc = n >= 16 && n <= (int)sizeof(k) ? ws_setkey(m, k, n) : SQLITE_ERROR;
+  OPENSSL_cleanse(k, sizeof(k));
   return rc;
 }
 
@@ -229,7 +244,10 @@ static int wsWalWrite(sqlite3_file *f, const void *zBuf, int iAmt, i64 iOfst){
   Region g;
   u8 *buf;
   int ok, rc;
-  if(iOfst == 0 && iAmt >= WS_LHDR) learn_hdr(p, zBuf);
+  if(iOfst == 0 && iAmt >= WS_LHDR){
+    if(ws_rekey(p->pMain)) return SQLITE_IOERR_WRITE;
+    learn_hdr(p, zBuf);
+  }
   for(ok = region_first(p, iOfst, &g); ok && g.off < b; ok = region_next(p, &g)){
     if(g.off < a) a = g.off;
     if(g.off + g.n > b) b = g.off + g.n;
@@ -278,6 +296,12 @@ static int wsFileControl(sqlite3_file *f, int op, void *arg){
   if(op == WS_FCNTL_KEY && p->isMain){
     const void **a = arg;
     return ws_setkey(p, a[0], *(const int*)a[1]);
+  }
+  if(op == WS_FCNTL_SRC && p->isMain){
+    void **a = arg;
+    p->xKey = (int(*)(void*, unsigned char*, int*))a[0];
+    p->pKeyArg = a[1];
+    return SQLITE_OK;
   }
   return RM(p)->xFileControl(REAL(p), op, arg);
 }
@@ -404,4 +428,12 @@ int walseal_key(sqlite3 *db, const char *zDb, const void *key, int nKey){
   a[0] = key;
   a[1] = &nKey;
   return sqlite3_file_control(db, zDb, WS_FCNTL_KEY, (void*)a);
+}
+
+int walseal_key_source(sqlite3 *db, const char *zDb,
+                       int (*xKey)(void *pArg, unsigned char *aKey, int *pnKey), void *pArg){
+  void *a[2];
+  a[0] = (void*)xKey;
+  a[1] = pArg;
+  return sqlite3_file_control(db, zDb, WS_FCNTL_SRC, (void*)a);
 }

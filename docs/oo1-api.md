@@ -658,6 +658,11 @@ in a Web Worker.  Every `xSync` (triggered by `COMMIT`) flushes the
 committed transactions.  SQLCipher encrypts the pages in the WAL;
 walseal enciphers the headers SQLite writes in the clear (page
 numbers, commit sizes, salts), keyed from SQLCipher's derived key.
+`PRAGMA rekey` through `exec()` keeps every commit: the worker
+checkpoints before and after it, and the WAL that follows is sealed
+under the new key.  A key pragma inside a transaction, or after an
+`open` whose key could not read the database, is refused with
+`not authorized`.
 
 **IndexedDB page cache** — The entire file is loaded into memory on
 open.  VFS reads/writes operate on the buffer; the WAL stays in
