@@ -70,7 +70,7 @@ jobs:
           make sqlite3.c
           ls -lh sqlite3.c sqlite3.h
 
-      - name: Smoke test — encrypted round-trip
+      - name: REQ1/ENC-1 REQ1/PLAT-1 smoke test — encrypted round-trip
         run: |
           gcc -O2 -o example_basic examples/basic.c \
             -I. -I$HOME/libressl/include \
@@ -87,7 +87,7 @@ jobs:
 
       # Last, because it reconfigures: sqlcipher.test needs -DSQLCIPHER_TEST
       # and FTS5 (upstream's test recipe), which must not go into the shipped .a.
-      - name: Run SQLCipher test suite
+      - name: REQ1/UP-1 REQ1/FMT-1 run SQLCipher test suite
         if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
         # Explicit bash runs with -eo pipefail; the container default (sh -e,
         # dash) has no pipefail, so the status would be tail's and failures pass.
@@ -159,7 +159,7 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
-      - name: Run WASM tests
+      - name: REQ1/WASM-1 run WASM tests
         run: node tests/wasm/run-tests.mjs
 
       - name: Package static libs for custom WASM builds

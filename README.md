@@ -170,14 +170,11 @@ cd test && ../testfixture sqlcipher.test
 **Tested:** files written by official SQLCipher open here, both natively
 (upstream's `sqlcipher-compatibility.test`, inside `sqlcipher.test`:
 1.1.8 through 4.0 files from `sqlcipher-resources/`) and in WASM (the
-"upstream compat" test in `tests/wasm/test.html`, which opens the 4.0 file).
+`REQ1/FMT-1` test in `tests/wasm/test.html`, which opens the 4.0 file).
 
-**Not tested, by decision (2026-10-20):** stock SQLCipher opening files
-written here.  It would need a second, OpenSSL 3 build of upstream in CI.
-A successful read already shows our HMAC, KDF and cipher output match
-upstream's for those settings, and writing uses the same code, so the
-extra build would add little.  Revisit if the patches start touching
-the write path, or if a user reports a file upstream can't open.
+**Not tested, by decision:** stock SQLCipher opening files written here.
+The reason and when to revisit are under *Scope decisions* in
+[docs/REQUIREMENTS_v1.md](docs/REQUIREMENTS_v1.md#scope-decisions).
 
 ## Patches
 
@@ -215,6 +212,7 @@ docs/
 | Doc | Scope |
 |-----|-------|
 | [docs/oo1-api.md](docs/oo1-api.md) | Unified API, oo1 API, persistence (OPFS + IndexedDB page cache), worker protocol, shred |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, and the working set: requirements, design, queue, findings |
 
 ## Upstream
 
