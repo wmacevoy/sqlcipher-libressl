@@ -12,11 +12,8 @@ env:
   # The upstream SQLCipher release this fork is based on. Bump it on each
   # upstream merge (CONTRIBUTING "Syncing with upstream").
   UPSTREAM_TAG: v4.16.0
-  # The one place for LibreSSL's version and the SHA-256 of its release
-  # tarball. The hash matches the SHA256 file OpenBSD publishes for 4.2.1.
-  # Bump both together (CONTRIBUTING "Pinned and floating inputs").
-  LIBRESSL_VERSION: 4.2.1
-  LIBRESSL_SHA256: 6d5c2f58583588ea791f4c8645004071d00dfa554a5bf788a006ca1eb5abd70b
+  # LibreSSL's version and tarball hash are in libressl.env, read by
+  # check.sh and by the wasm job.
 
 jobs:
   upstream-diff:
@@ -74,44 +71,19 @@ jobs:
         if: matrix.deps != ''
         run: ${{ matrix.deps }}
 
-      - name: Download and build LibreSSL
-        run: |
-          # Download to a file and check it before unpacking: through a pipe,
-          # a changed or truncated tarball would be built without complaint.
-          t=libressl-$LIBRESSL_VERSION.tar.gz
-          curl -fsSL -o "$t" https://github.com/libressl/portable/releases/download/v$LIBRESSL_VERSION/$t
-          echo "$LIBRESSL_SHA256  $t" | sha256sum -c -
-          tar xzf "$t"
-          cd libressl-$LIBRESSL_VERSION
-          mkdir build && cd build
-          cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \
-            -DLIBRESSL_APPS=OFF -DLIBRESSL_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-          make -j$(nproc)
-          make install
+      # LibreSSL (pinned in libressl.env), the release library, the smoke
+      # test and upstream's TCL suite, as a contributor runs them locally.
+      # The suite runs on linux-glibc-x64 only: REQ1/UP-1 promises it there,
+      # and it has never been run on the other platforms.
+      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 REQ1/UP-1 REQ1/FMT-1 check.sh
+        run: ./check.sh
+        env:
+          CHECK_TCL: ${{ matrix.artifact == 'libsqlcipher-linux-glibc-x64.a' && 'yes' || 'no' }}
 
-      - name: Configure SQLCipher with LibreSSL
-        run: |
-          ./configure --with-tempstore=yes \
-            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -I$HOME/libressl/include" \
-            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-
-      - name: Build
-        run: make -j$(nproc)
-
-      - name: Build amalgamation
-        run: |
-          make sqlite3.c
-          ls -lh sqlite3.c sqlite3.h
-
-      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 smoke test — encrypted round-trip
-        run: |
-          gcc -O2 -o example_basic examples/basic.c \
-            -I. -I$HOME/libressl/include \
-            libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
-          ./example_basic
-
+      # check.sh keeps the release build as libsqlcipher.a; the TCL suite's
+      # test-only build never replaces it.
       - name: Rename artifact
-        run: cp libsqlite3.a ${{ matrix.artifact }}
+        run: cp libsqlcipher.a ${{ matrix.artifact }}
 
       # The name is the claim (FINDINGS 2026-10-20: a "macos-x64" .a was arm64).
       # file on a .a says only "ar archive", so read the members: objdump -f
@@ -149,21 +121,6 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-      # Last, because it reconfigures: sqlcipher.test needs -DSQLCIPHER_TEST
-      # and FTS5 (upstream's test recipe), which must not go into the shipped .a.
-      - name: REQ1/UP-1 REQ1/FMT-1 run SQLCipher test suite
-        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
-        # Explicit bash runs with -eo pipefail; the container default (sh -e,
-        # dash) has no pipefail, so the status would be tail's and failures pass.
-        shell: bash
-        run: |
-          make distclean
-          ./configure --with-tempstore=yes --enable-fts5 \
-            CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_TEST -I$HOME/libressl/include" \
-            LDFLAGS="$HOME/libressl/lib/libcrypto.a"
-          make testfixture
-          cd test && ../testfixture sqlcipher.test 2>&1 | tail -30
-
   wasm:
     runs-on: ubuntu-24.04
     steps:
@@ -181,6 +138,7 @@ jobs:
 
       - name: Download and build LibreSSL (native + WASM)
         run: |
+          . ./libressl.env
           # Download to a file and check it before unpacking: through a pipe,
           # a changed or truncated tarball would be built without complaint.
           t=libressl-$LIBRESSL_VERSION.tar.gz

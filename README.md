@@ -128,11 +128,15 @@ reject wrong key).
 
 - C compiler, cmake, LibreSSL v4.2.1
 
+`./check.sh` does all of the steps below — LibreSSL, the library, the smoke
+test, the TCL suite — and leaves the release library in `libsqlcipher.a`
+(see [CONTRIBUTING.md](CONTRIBUTING.md#build)). By hand:
+
 ### Install LibreSSL
 
 ```bash
 curl -fsSLO https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz
-sha256sum libressl-4.2.1.tar.gz   # must equal LIBRESSL_SHA256 in .github/workflows/build-test.yml
+sha256sum libressl-4.2.1.tar.gz   # must equal LIBRESSL_SHA256 in libressl.env
 tar xzf libressl-4.2.1.tar.gz
 cd libressl-4.2.1 && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/libressl \

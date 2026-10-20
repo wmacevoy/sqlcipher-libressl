@@ -94,8 +94,14 @@ Reasons are from the commit messages unless marked *(inferred)*
   Known hazards.
 - **Shred overwrites with `crypto.getRandomValues` before deleting** (`3033477f`, fixed `e12e2185`)
   — REQ1/SHR-1 — defense in depth on top of encryption.
-- **The TCL suite has its own configure, after the release `.a` is uploaded** (PR #1) — REQ1/UP-1
-  — `-DSQLCIPHER_TEST` must not ship.
+- **The TCL suite has its own configure, after the release `.a` is kept** (PR #1) — REQ1/UP-1
+  — `-DSQLCIPHER_TEST` must not ship. `check.sh` copies the release build to `libsqlcipher.a`
+  before reconfiguring, and CI uploads that copy.
+- **One native check, `check.sh`, run locally and by CI** (QUEUE #6) — every CI surprise in
+  FINDINGS 2026-03-20/21 could have cost a local run instead of a push. Plain POSIX `sh`, because
+  the Alpine container has no bash; the suite's status is read from a log file, not a pipe, since
+  `sh` has no `pipefail`. The LibreSSL pin moved to `libressl.env` so `check.sh` and the wasm job
+  read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
   [Scope decisions](REQUIREMENTS_v5.md#scope-decisions).
 - **Drop the macos-x64 build** (maintainer, 2026-10-20) — REQ2/PLAT-1 — it was built on an arm64
