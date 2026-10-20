@@ -46,3 +46,4 @@ tests/wasm/node_modules/
 tests/wasm/package*.json
 tests/wasm/sqlcipher.*
 tests/wasm/sqlcipher-*.js
+tests/wasm/*.db
