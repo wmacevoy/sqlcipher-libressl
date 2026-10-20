@@ -69,7 +69,7 @@ site's data, or `shred()` the database.
 ## Test
 
 ```sh
-# Smoke test (REQ1/ENC-1)
+# Smoke test (REQ1/ENC-1, REQ2/ENC-2)
 gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
   libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 ./basic
@@ -112,7 +112,8 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | upstream's `sqlcipher.test` in CI | any change that breaks SQLCipher's behavior, including file compatibility | 12 errors, exit 1, with the release flags (locally, 2026-10-19) |
 | `shell: bash` (pipefail) on the suite step | the suite failing behind `| tail` | `bash -e` vs `bash -eo pipefail` on a failing pipe, 2026-10-19 |
 | WASM "upstream compat" test | the WASM build unable to read an upstream-written file | wrong key: "file is not a database", run 39367518601 |
-| `examples/basic.c` | a database written unencrypted, readable without the key, or readable with the wrong one | `sqlite3_key` removed at create: exit 1 at step 2 (locally, 2026-10-20) |
+| `examples/basic.c` | a database written unencrypted, readable without the key, or readable with the wrong one; one written without a key that is not plain SQLite (step 5, REQ2/ENC-2) | `sqlite3_key` removed at create: exit 1 at step 2; `sqlite3_key` planted in step 5: exit 1 (locally, 2026-10-20) |
+| WASM "no key" test | the worker encrypting a database opened without a key | worker planted to key every database: run 39465323702 |
 
 ## Syncing with upstream
 
