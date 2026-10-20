@@ -6,6 +6,7 @@
 <div id="result" data-status="running" data-passed="0" data-failed="0" data-total="0"></div>
 <script src="sqlcipher.js"></script>
 <script src="sqlcipher-api.js"></script>
+<script src="sqlcipher-oo1.js"></script>
 <script>
 (async function() {
   var logEl = document.getElementById("log");
@@ -180,6 +181,57 @@
     var rows = await db.select("SELECT count(*) AS n FROM t1");
     assertEqual(rows[0].n, 78536, "row count");
     await db.close();
+  });
+
+  // Every byte value, and an empty array: an empty one must still be a BLOB, not NULL.
+  var ALL_BYTES = new Uint8Array(256);
+  for (var bi = 0; bi < 256; bi++) ALL_BYTES[bi] = bi;
+
+  function assertBytes(got, want, msg) {
+    assert(got instanceof Uint8Array, msg + ": not a Uint8Array: " + Object.prototype.toString.call(got));
+    assertEqual(got.length, want.length, msg + " length");
+    for (var i = 0; i < want.length; i++)
+      if (got[i] !== want[i]) throw new Error(msg + ": byte " + i + " is " + got[i] + ", want " + want[i]);
+  }
+
+  await test("REQ2/API-2 BLOBs round-trip through the unified API", async function() {
+    var db = await SQLCipher.open({filename: "/t11.db", key: "k11"});
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, b BLOB)");
+    await db.exec("INSERT INTO t VALUES (1, ?)", [ALL_BYTES]);
+    await db.exec("INSERT INTO t VALUES (2, ?)", [new Uint8Array(0)]);
+    var rows = await db.select("SELECT b, typeof(b) AS ty FROM t ORDER BY id");
+    assertEqual(rows[0].ty, "blob", "row 1 type");
+    assertBytes(rows[0].b, ALL_BYTES, "row 1");
+    assertEqual(rows[1].ty, "blob", "row 2 type");
+    assertBytes(rows[1].b, new Uint8Array(0), "row 2");
+    await db.close();
+  });
+
+  await test("REQ3/OO1-1 BLOBs round-trip through the oo1 shim", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module, ":memory:");
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, b BLOB)");
+    var ins = db.prepare("INSERT INTO t VALUES (?, ?)");
+    ins.bind([1, ALL_BYTES]).stepReset();
+    ins.bind(1, 2); ins.bindAsBlob(2, new Uint8Array(0)); ins.stepReset();
+    ins.bind(1, 3); ins.bindAsBlob(2, "h\u00e9llo"); ins.stepReset();
+    ins.finalize();
+
+    var sel = db.prepare("SELECT b, typeof(b) AS ty FROM t ORDER BY id");
+    assert(sel.step(), "row 1");
+    assertEqual(sel.get(1), "blob", "row 1 type");
+    assertBytes(sel.get(0), ALL_BYTES, "get(ndx)");
+    assertBytes(sel.get([])[0], ALL_BYTES, "get([])");
+    assertBytes(sel.get({}).b, ALL_BYTES, "get({})");
+    assertBytes(sel.getBlob(0), ALL_BYTES, "getBlob");
+    assert(sel.step(), "row 2");
+    assertEqual(sel.get(1), "blob", "row 2 type");
+    assertBytes(sel.getBlob(0), new Uint8Array(0), "empty bindAsBlob");
+    assert(sel.step(), "row 3");
+    assertEqual(sel.get(1), "blob", "row 3 type");
+    assertBytes(sel.getBlob(0), new TextEncoder().encode("h\u00e9llo"), "bindAsBlob(string) as UTF-8");
+    sel.finalize();
+    db.close();
   });
 
   // ── Report ─────────────────────────────────────────────────
