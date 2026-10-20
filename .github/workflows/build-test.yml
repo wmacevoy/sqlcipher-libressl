@@ -103,6 +103,37 @@ jobs:
       - name: Rename artifact
         run: cp libsqlite3.a ${{ matrix.artifact }}
 
+      # The name is the claim (FINDINGS 2026-10-20: a "macos-x64" .a was arm64).
+      # file on a .a says only "ar archive", so read the members: objdump -f
+      # on Linux (binutils comes with gcc), lipo -info on macOS. POSIX sh:
+      # the Alpine container has no bash.
+      - name: REQ2/PLAT-1 the artifact is the architecture its name says
+        run: |
+          a=${{ matrix.artifact }}
+          case "$a" in
+            *-x64.a)   want_elf='i386:x86-64'; want_macho='x86_64' ;;
+            *-arm64.a) want_elf='aarch64';     want_macho='arm64' ;;
+            *) echo "FAIL: REQ2/PLAT-1 no known architecture in the name $a"; exit 1 ;;
+          esac
+          if [ "$(uname -s)" = Darwin ]; then
+            # Only a thin archive prints "Non-fat file: ... is architecture: X";
+            # a fat one lists several and leaves this empty.
+            lipo -info "$a"
+            got=$(lipo -info "$a" | sed -n 's/^Non-fat file: .* is architecture: //p')
+            want="$want_macho"
+          else
+            # Every member's architecture, deduplicated: exactly one line if
+            # they all agree. A failing objdump leaves it empty.
+            got=$(objdump -f "$a" | sed -n 's/^architecture: \([^,]*\),.*/\1/p' | sort -u)
+            echo "$got"
+            want="$want_elf"
+          fi
+          if [ "$got" != "$want" ]; then
+            echo "FAIL: REQ2/PLAT-1 $a is not $want"
+            exit 1
+          fi
+          echo "PASS: REQ2/PLAT-1 $a is $want"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
