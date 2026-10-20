@@ -13,6 +13,7 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | unified API | 6 | `wasm/sqlcipher-api.js` | `SQLCipher.open()` → a handle; one worker per handle; each method is one message and one promise | pending requests |
 | oo1 shim | 6 | `wasm/sqlcipher-oo1.js` | sqlite3's oo1 API on the main thread; file in MEMFS; `save()` writes the whole file to IndexedDB | open DB, statements |
 | worker | 5 | `wasm/sqlcipher-worker.js` | answers the message protocol; chooses the backend; keeps the handle table the VFS reads and writes | handle table, current filename and key, IndexedDB buffer |
+| walseal | 4 | `wasm/walseal.c`, `wasm/walseal_sqlcipher.c` | VFS shim over the VFS, the default in the worker: enciphers the `-wal` file's headers in place, passes every other file through; keyed from SQLCipher's derived key | walseal's AES key, per open database |
 | VFS | 4 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker's handle table through `EM_JS` | no |
 | WASM helpers | 4 | `wasm/sqlcipher_wasm.c` | thin `wasm_db_*` / `wasm_stmt_*` wrappers, so JS never manages WASM memory; one set of SQL-function trampolines that call the oo1 shim through `EM_JS` | no |
 | SQLCipher | 3 | `src/` (upstream + the patches), built as `sqlite3.c` | SQLite with page encryption; `sqlite3_key` | SQLite's own |
@@ -26,12 +27,16 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | ----- | --------------------- | ------ | ------------- | ---------------------------- |
 | database file, OPFS backend | the OPFS file | SQLite's page cache | until `xSync` at commit | next open: the file as last synced |
 | database file, IndexedDB backend | worker memory (`h.buf`) while open | IndexedDB blocks `[filename, n]`, meta `[filename, -1]` | until the end of the current `exec` (flushed after each one) | next open: the blocks as last flushed |
-| journal, WAL, SHM files | worker memory, **both backends** (`_opfs_open_sync` → `openIdb`) | none | — | lost if the worker dies; `xAccess` always reports "no file", so a hot journal is never seen |
+| WAL, OPFS backend | the `<database>-wal` OPFS file, pre-opened with the database; headers enciphered by walseal | SQLite's WAL index, in the heap (`locking_mode=EXCLUSIVE`) | until `xSync` at commit | next open: SQLite recovers the frames up to the last synced commit |
+| WAL, IndexedDB backend | worker memory, never stored | none | checkpointed (`TRUNCATE`) into the database before each flush | lost if the worker dies, but the stored database already holds every flushed commit |
+| rollback journal | worker memory (`_opfs_open_sync` → `openIdb`), only while SQLite switches a database to WAL | none | — | lost if the worker dies during that one page-1 write; `xAccess` reports no journal |
 | database file, oo1 shim | MEMFS (memory) | one IndexedDB blob per store name | until `save()` | next load: the blob as last saved |
-| key | the caller | `_currentKey` in the worker (a JS string, kept for `import`); SQLCipher's derived key in the WASM heap | for the worker's lifetime | — |
+| key | the caller | `_currentKey` in the worker (a JS string, kept for `import`); SQLCipher's derived key in the WASM heap; walseal's key (HMAC of the derived key) in the WASM heap | for the worker's lifetime | — |
 
-**Memory is the danger.** Every backend keeps something only in memory, and a browser can stop a
-worker at any moment. DUR-2 depends on what is in memory when that happens; see Known hazards.
+**Memory is the danger.** A browser can stop a worker at any moment. On OPFS every commit is
+synced to the `-wal` file; the IndexedDB backend keeps the WAL and the unflushed database in
+memory, and stores only flushed, committed states; the oo1 shim keeps everything in memory until
+`save()`. See Known hazards.
 
 ## Essential complexity
 
@@ -41,7 +46,8 @@ worker at any moment. DUR-2 depends on what is in memory when that happens; see 
    in workers; IndexedDB is asynchronous, so its file lives in memory and is flushed after each
    statement (REQ1/DUR-1).
 4. One API over two backends that differ in durability (REQ1/API-1).
-5. Crash consistency with no journal on disk (REQ1/DUR-2).
+5. Crash consistency through a journal on storage that must not show what SQLite writes in the
+   clear (REQ1/DUR-2, REQ6/ENC-3).
 6. Keeping the diff from upstream small enough that merging stays cheap (REQ1/UP-2).
 
 ## One-way doors
@@ -92,23 +98,58 @@ Reasons are from the commit messages unless marked *(inferred)*
   commit. Rejected: explicit `save()` (renamed `flush()`, `087b6ec5`, and kept for manual use).
 - **Journal, WAL and SHM in memory on both backends** (`d68bba71`) — "transient and don't need
   persistence"; this fixed "unable to open database file" on every OPFS write. **Superseded** by the
-  next decision, once it lands (QUEUE #16).
+  next decision (QUEUE #16); only the rollback journal SQLite uses to switch a database to WAL is
+  still in memory.
 - **A write-ahead log on storage, its headers enciphered by walseal** (maintainer, 2026-10-20) —
-  REQ1/DUR-2, REQ6/ENC-3 — `locking_mode=EXCLUSIVE` then `journal_mode=WAL`: one connection per
-  worker already holds the file exclusively, and exclusive mode keeps the WAL index in heap memory,
-  so the VFS needs no shared memory. The `-wal` file is a real file on the backend, opened ahead of
-  time like the database (`createSyncAccessHandle` is asynchronous; SQLite's open is not), and
-  `xAccess` answers truthfully, so recovery finds it. walseal, a VFS shim from the maintainer's
-  `sqlcipher-embedded` (branch `experiment/wal-seal`, `embedded/sqlcipher/walseal.c`), enciphers the
-  WAL's file and frame headers in place with a length-preserving tweaked PRP, keeping SQLite's
-  layout, writes and syncs; it is ported from PSA Crypto to LibreSSL's `libcrypto`. Its key is
-  derived from SQLCipher's own derived key for the database, not from the passphrase, so the
-  headers cost the same PBKDF2 work to attack as the pages. Rejected: a rollback journal in
-  `TRUNCATE` mode (simpler, no crypto, but every page written twice, page numbers in the clear in
-  the journal, and the IndexedDB spill hazard stays); the passphrase as walseal's key (brute-forced
-  without PBKDF2's cost); a separate WAL key option (new API surface and key management for
-  integrators). Also ends the IndexedDB spill hazard: uncommitted pages now go to the WAL, not the
-  database file.
+  REQ1/DUR-2, REQ6/ENC-3 — the worker opens every database with `locking_mode=EXCLUSIVE` then
+  `journal_mode=WAL`: one connection per worker already holds the file exclusively, and exclusive
+  mode keeps the WAL index in heap memory, so the VFS needs no shared memory. walseal, a VFS shim
+  from the maintainer's `sqlcipher-embedded` (branch `experiment/wal-seal`, commit `5d50c676`),
+  enciphers the WAL's file and frame headers in place with a length-preserving tweaked PRP,
+  keeping SQLite's layout, writes and syncs; it is ported from PSA Crypto to LibreSSL's
+  `libcrypto` (EVP AES-256-ECB, `HMAC()`), the algorithm unchanged, and `sqlite3_opfs_init`
+  registers it over `opfs` as the default VFS. Rejected: a rollback journal in `TRUNCATE` mode
+  (simpler, no crypto, but every page written twice, page numbers in the clear in the journal,
+  and the IndexedDB spill hazard stays); the passphrase as walseal's key (brute-forced without
+  PBKDF2's cost); a separate WAL key option (new API surface and key management for integrators).
+  - *On OPFS* the `-wal` is a real OPFS file, pre-opened with the database
+    (`createSyncAccessHandle` is asynchronous; SQLite's `xOpen` is not). Its handle outlives
+    SQLite's `xClose`, so SQLite can reopen it, and the worker closes it after the database.
+    `xDelete` empties it instead of removing it (`removeEntry` is asynchronous too), and `xAccess`
+    answers from the pre-opened handles: a file exists if it is non-empty. So recovery finds a WAL
+    with frames, and an emptied one reads as none. A `-wal` that was not pre-opened is an error,
+    not a memory file.
+  - *On IndexedDB* the WAL stays in worker memory and is never stored. In WAL mode only a
+    checkpoint writes the database file, and it copies committed pages only; each `exec` ends with
+    a `TRUNCATE` checkpoint and one IndexedDB transaction for the dirty blocks, so what is stored
+    is always a committed state, and a dead worker loses at most the `exec` in flight, which never
+    resolved. Storing the WAL too would add a second write per commit and a change to the
+    IndexedDB layout (a one-way door) for no gain in DUR-2. This also ends the old spill hazard:
+    uncommitted pages now go to the WAL, not the database file.
+  - *The key* is SQLCipher's derived encryption key for the database (PBKDF2 of the passphrase,
+    or the raw key), which walseal turns into its own with HMAC-SHA256 and the label
+    `walseal hdr`; so the headers cost the same PBKDF2 work to attack as the pages.
+    `walseal_key_from_codec` (`wasm/walseal_sqlcipher.c`, compiled in the amalgamation's
+    translation unit because it calls SQLCipher's static codec functions) runs right after
+    `sqlite3_key` and before the first read: it asks SQLCipher to derive the key now, as the first
+    page read would, so the read then finds it derived (one PBKDF2, not two), unmasks a copy,
+    hands it to walseal and wipes it. It must run before the first read because that read can
+    open the WAL, and walseal refuses a WAL without a key. Rejected: walseal pulling the key
+    lazily when it opens the WAL (the VFS cannot reach the pager's codec from a file; it would need
+    a callback and the database handle). With no key (REQ2/ENC-2) there is no codec and the WAL
+    passes through: an unencrypted database's pages are in the clear anyway.
+  - *A key that cannot read the database* (wrong, or none for an encrypted file) still derives a
+    walseal key, so the WAL's headers decipher to noise and SQLite takes the WAL for empty. A
+    normal close would then checkpoint nothing and delete the WAL, losing its commits. So when
+    `journal_mode=WAL` fails with `SQLITE_NOTADB`, the worker sets
+    `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`, and `open` still resolves (REQ1/ENC-1: the first read
+    fails, not the open). It then gives SQLCipher the key again, which resets its codec: after a
+    failed read SQLCipher answers every later read "out of memory", so without this the caller's
+    first read would not fail with `file is not a database`.
+  - *export* checkpoints (`TRUNCATE`) before reading the file; *import* empties the `-wal` before
+    reopening, so no frame of the old database is replayed over the new one; *shred* overwrites
+    the `-wal`'s frames with random bytes (closing without a checkpoint, so they are still there)
+    and removes it, as it does the database.
 - **Shred overwrites with `crypto.getRandomValues` before deleting** (`3033477f`, fixed `e12e2185`)
   — REQ1/SHR-1 — defense in depth on top of encryption.
 - **The TCL suite has its own configure, after the release `.a` is kept** (PR #1) — REQ1/UP-1
@@ -149,21 +190,22 @@ Reasons are from the commit messages unless marked *(inferred)*
 
 ## Known hazards
 
-From reading the code on 2026-10-20. Each is a QUEUE item with a test to write first; the first
-has now been run.
+From reading the code on 2026-10-20; none of them has been run. Each is a QUEUE item with a test to
+write first. (The first one recorded here, "No journal survives a crash", was confirmed by the
+REQ1/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16.)
 
-- **No journal survives a crash.** SQLite writes changed pages into the database file during commit.
-  With the journal in memory and `xAccess` always "no", a worker that dies partway through leaves a
-  half-written file and nothing to roll it back. On OPFS that is any commit. On IndexedDB each flush
-  is one IndexedDB transaction after a whole `exec`, so the exposure is narrower: a transaction left
-  open across `exec` calls that grows large enough to spill SQLite's cache, whose uncommitted pages
-  the next flush then stores. This contradicts REQ1/DUR-2. **Confirmed** by the REQ1/DUR-2 crash
-  tests in `tests/wasm/test.html` (`crash-worker.js` kills the worker before each VFS write), the
-  same in Chromium, Firefox and WebKit: on OPFS, a kill during a commit's main-file writes leaves
-  `database disk image is malformed`, and a kill after a cache spill leaves the uncommitted rows
-  visible with `integrity_check` ok; on IndexedDB a one-`exec` transaction always reopens at its
-  last commit, and a transaction spanning `exec`s shows its uncommitted rows once a spilled page has
-  been flushed.
+- **Changing the key inside a session can lose the WAL's commits** (QUEUE #16, from reading the
+  code; untested). walseal's key is fixed when the worker opens the database. `PRAGMA rekey`, or a
+  `PRAGMA key` after a failed first read, changes SQLCipher's key but not walseal's, so frames
+  written afterwards are sealed under a key the next `open` (with the new passphrase) does not
+  derive; if the worker dies before a checkpoint, the next `open` sees no WAL. A database that
+  needs non-default cipher settings (`PRAGMA cipher_compatibility` and the like, given after
+  `open`) fails the read `open` makes, so the worker never switches it to WAL: unless it already
+  is one, its rollback journal stays in memory, as before this change, and DUR-2 does not hold
+  for it.
+- **The switch to WAL uses a rollback journal in memory.** The first time a database is opened,
+  SQLite writes page 1 to mark it WAL, journaled in memory. Killing a worker cannot tear that one
+  write; a power loss might (as below).
 - **A torn page 1 during a checkpoint makes the database unopenable** (found in
   `sqlcipher-embedded`, its README): SQLCipher reads the KDF salt from page 1 of the database file
   before it consults the WAL. Killing a worker cannot tear a write, since each `write()` on a sync access

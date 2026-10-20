@@ -81,10 +81,16 @@ BLOB columns read back as `Uint8Array`; integers as numbers, or as `BigInt`s bey
 
 | | OPFS (auto, preferred) | IndexedDB page cache (auto, fallback) |
 |-|----------------------|--------------------------------------|
-| **Durability** | Every COMMIT (via VFS xSync) | Every exec (auto-flush) |
-| **Write cost** | 4KB per changed page | 4KB per dirty block |
-| **Tab crash** | Data safe | Data safe (flushed per exec) |
+| **Durability** | Every COMMIT, synced to the write-ahead log (`-wal`) | Every exec (checkpoint, then auto-flush) |
+| **Write cost** | 4KB per changed page to the WAL, again at each checkpoint | 4KB per dirty block |
+| **Tab crash** | Data safe (the next open replays the WAL's commits) | Data safe (the stored copy is the last flushed commit) |
 | **Browser** | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers |
+
+The worker opens every database in `locking_mode=EXCLUSIVE` and `journal_mode=WAL`. On OPFS the
+`-wal` file sits next to the database; SQLCipher encrypts the pages in it, and walseal enciphers
+the headers SQLite would write in the clear (page numbers, commit sizes, salts), keyed from
+SQLCipher's derived key. On IndexedDB the WAL stays in worker memory and only committed,
+checkpointed states are stored. `export()` checkpoints first, so it returns the whole database.
 
 ### Worker message protocol
 

@@ -640,24 +640,31 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 
 ### How persistence works
 
-Both backends use the same SQLite VFS (`opfs_vfs.c`).  The VFS calls
-dispatch to different JS backing stores per handle:
+Both backends use the same SQLite VFS (`opfs_vfs.c`), with walseal
+(`walseal.c`) stacked over it.  The worker opens every database in
+`locking_mode=EXCLUSIVE` and `journal_mode=WAL`, so a commit writes
+its pages to the write-ahead log, not the database file.  The VFS
+calls dispatch to different JS backing stores per handle:
 
 ```
-VFS xRead/xWrite
-  ├── OPFS:      SyncAccessHandle   (sync I/O, durable per commit)
-  └── IndexedDB: in-memory buffer   (sync I/O, persisted on save/close)
+VFS xRead/xWrite (walseal enciphers the -wal file's headers)
+  ├── OPFS:      SyncAccessHandle   (sync I/O; database and -wal, durable per commit)
+  └── IndexedDB: in-memory buffer   (sync I/O; WAL in memory, database flushed per exec)
 ```
 
 **OPFS** — `FileSystemSyncAccessHandle` provides synchronous read/write
-in a Web Worker.  Every `xSync` (triggered by `COMMIT`) flushes to
-disk.  Zero data loss on tab crash.
+in a Web Worker.  Every `xSync` (triggered by `COMMIT`) flushes the
+`-wal` file to disk; after a tab crash the next `open` replays its
+committed transactions.  SQLCipher encrypts the pages in the WAL;
+walseal enciphers the headers SQLite writes in the clear (page
+numbers, commit sizes, salts), keyed from SQLCipher's derived key.
 
 **IndexedDB page cache** — The entire file is loaded into memory on
-open.  VFS reads/writes operate on the buffer.  Dirty 4KB blocks are
-tracked and auto-flushed to IndexedDB after every `exec()` (checkpoint
-WAL + write only changed blocks).  `flush()` is available for manual
-control but is no longer required for durability.
+open.  VFS reads/writes operate on the buffer; the WAL stays in
+memory.  After every `exec()` the WAL is checkpointed into the buffer
+and the dirty 4KB blocks are flushed to IndexedDB in one transaction,
+so what is stored is always a committed state.  `flush()` is available
+for manual control but is no longer required for durability.
 
 IndexedDB schema (`sqlcipher_pages` database, `blocks` object store):
 
@@ -745,9 +752,9 @@ await db.save();   // exports entire encrypted blob → IndexedDB
 
 | | OPFS (unified/worker) | IndexedDB page cache (unified/worker) | IndexedDB blob (oo1) |
 |-|----------------------|--------------------------------------|---------------------|
-| Durability | Every COMMIT (VFS xSync) | Every exec (auto-flush) | On `save()` call |
-| Write cost | 4KB per changed page | 4KB per dirty block | Entire database blob |
-| Tab crash | Data safe | Data safe (flushed per exec) | Data since last `save()` lost |
+| Durability | Every COMMIT, synced to the `-wal` | Every exec (checkpoint, then auto-flush) | On `save()` call |
+| Write cost | 4KB per changed page to the WAL, again at each checkpoint | 4KB per dirty block | Entire database blob |
+| Tab crash | Data safe (the next open replays the WAL) | Data safe (the stored copy is the last flushed commit) | Data since last `save()` lost |
 | Thread | Worker (auto) | Worker (auto) | Main thread |
 | Browser support | Chrome 108+, Safari 16.4+, Firefox 111+ | All browsers | All browsers |
 
@@ -779,8 +786,8 @@ await db.import(blob);
 ### Shred (secure delete)
 
 `shred()` overwrites every stored block with `crypto.getRandomValues()`
-random data, flushes to storage, then deletes the file.  The handle is
-unusable after shred.
+random data, flushes to storage, then deletes the file — on OPFS, the
+`-wal` file too.  The handle is unusable after shred.
 
 ```js
 await db.shred();
