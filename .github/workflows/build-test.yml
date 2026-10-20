@@ -187,7 +187,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: REQ1/WASM-1 run WASM tests
+      - name: REQ1/WASM-1 REQ1/DUR-1 REQ1/API-1 run WASM tests on the OPFS and IndexedDB backends
         run: node tests/wasm/run-tests.mjs
 
       - name: Package static libs for custom WASM builds
