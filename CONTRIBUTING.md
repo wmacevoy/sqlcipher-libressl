@@ -86,14 +86,15 @@ cd test && ../testfixture sqlcipher.test     # ends "0 errors out of 208 tests"
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    wasm/dist/sqlcipher-worker.js wasm/dist/sqlcipher-oo1.js \
    sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
-(cd tests/wasm && npm init -y >/dev/null && npm install playwright && npx playwright install chromium)
+(cd tests/wasm && npm ci && npx playwright install chromium)   # Playwright as locked
 node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 failed -- PASS"
 ```
 
 On macOS with Tcl from conda or Homebrew, `testfixture` may need
 `DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
 
-CI (`.github/workflows/build-test.yml`) checks that `src/` differs from upstream's tag only in the
+CI (`.github/workflows/build-test.yml`) checks the LibreSSL tarball against its SHA-256, checks
+that `src/` differs from upstream's tag only in the
 two patched files, builds and smoke-tests on all four platforms, checks that each `.a` is the
 architecture its name says (`objdump -f`, or `lipo -info` on macOS) before uploading it, runs
 upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium. On
@@ -116,6 +117,28 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | WASM "upstream compat" test | the WASM build unable to read an upstream-written file | wrong key: "file is not a database", run 39367518601 |
 | `examples/basic.c` | a database written unencrypted, readable without the key, or readable with the wrong one; one written without a key that is not plain SQLite (step 5, REQ2/ENC-2) | `sqlite3_key` removed at create: exit 1 at step 2; `sqlite3_key` planted in step 5: exit 1 (locally, 2026-10-20) |
 | WASM "no key" test | the worker encrypting a database opened without a key | worker planted to key every database: run 39465323702 |
+
+## Pinned and floating inputs
+
+What CI builds from, and whether it can change under us. The rule: every tag names a release, never
+`latest`, so a new release arrives as a commit here; inside a release, updates float.
+
+| Input | Where | Pinned to | Floats | Why |
+| ----- | ----- | --------- | ------ | --- |
+| LibreSSL tarball | `LIBRESSL_VERSION`, `LIBRESSL_SHA256` in the workflow's `env` | 4.2.1, by SHA-256 | nothing | the crypto we ship; a changed tarball must stop the build (REQ1/LIB-1) |
+| Playwright and its Chromium | `tests/wasm/package.json` and `package-lock.json`, installed with `npm ci` | 1.64.1, which fixes its browser build | nothing | a new browser arrives as a reviewed change, not as a red run |
+| Emscripten | `setup-emsdk`'s `version:` | 3.1.74 | nothing | it decides the WASM output |
+| upstream SQLCipher | `UPSTREAM_TAG` | v4.16.0 | nothing | the two-file diff is measured against it |
+| containers | `debian:bookworm`, `alpine:3.19` | the distribution release | point and patch updates | the release fixes the libc the `.a` targets; the updates are security fixes |
+| runners | `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-26` | the OS release | GitHub's image updates | `macos-26` is what `macos-latest` ran on 2026-10-20 and builds the shipped macOS `.a`; the Linux runners host a container, or (WASM) supply only `tcl` and `cmake` |
+| actions | `actions/*@v4`, `mymindstorm/setup-emsdk@v14`, `softprops/action-gh-release@v2` | the major version | minor and patch releases | the publisher's compatibility promise; pinning by commit SHA is an open choice |
+| Node.js | `setup-node`'s `node-version` | 22 | minor and patch | runs only the test runner |
+
+To bump LibreSSL, download the new tarball, check its hash against the `SHA256` file OpenBSD
+publishes (`https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/SHA256`), and change both `env` values
+together. To bump Playwright, change its version in `tests/wasm/package.json`, run
+`npm install --package-lock-only` there, and commit both files. A runner or container its
+publisher retires fails the job by name; move it to the next release then.
 
 ## Syncing with upstream
 
