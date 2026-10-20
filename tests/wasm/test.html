@@ -797,6 +797,127 @@
     ]);
   });
 
+  // ── The WAL on storage ─────────────────────────────────────
+  //
+  // A "crash" is the page terminating the handle's worker without close(),
+  // through the handle's private _worker: no checkpoint, no flush.
+
+  async function writeRows(db, n) {
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT)");
+    for (var i = 1; i <= n; i++) await db.exec("INSERT INTO t VALUES (?, ?)", [i, "row " + i]);
+  }
+
+  // Terminate, then wait until the dead worker's OPFS locks are released: a
+  // writable (discarded unwritten) cannot be created while a sync access handle is open.
+  async function crash(db) {
+    db._worker.terminate();
+    db._worker = null;
+    if (db.mode !== "opfs") return;
+    var root = await navigator.storage.getDirectory();
+    var names = [db.filename.slice(1), db.filename.slice(1) + "-wal"];
+    for (var n = 0; n < names.length; n++) {
+      for (var tries = 0; ; tries++) {
+        try {
+          var w = await (await root.getFileHandle(names[n])).createWritable({keepExistingData: true});
+          await w.abort();
+          break;
+        } catch (e) {
+          if (tries >= 100) throw new Error(names[n] + " still locked: " + e.message);
+          await new Promise(function(r) { setTimeout(r, 50); });
+        }
+      }
+    }
+  }
+
+  async function readOpfs(name) {
+    var root = await navigator.storage.getDirectory();
+    var file = await (await root.getFileHandle(name)).getFile();
+    return new Uint8Array(await file.arrayBuffer());
+  }
+
+  function be32(b, off) {
+    return ((b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3]) >>> 0;
+  }
+
+  await test("REQ6/ENC-3 the stored -wal shows no WAL header field in the clear", async function() {
+    var db = await SQLCipher.open({filename: "/t20.db", key: "k20"});
+    var mode = db.mode;
+    await writeRows(db, 20);
+    await crash(db);
+    if (mode !== "opfs") { log("  (indexeddb: the WAL is never stored)"); return; }
+    var w = await readOpfs("t20.db-wal");
+    assert(w.length >= 32 + 24 + 4096, "-wal holds frames: " + w.length + " bytes");
+    var magic = be32(w, 0);
+    assert(magic !== 0x377f0682 && magic !== 0x377f0683, "WAL magic in the clear");
+    assert(be32(w, 8) !== 4096, "page size in the clear");
+    // In the clear every frame header starts with a page number of this small
+    // database and repeats the header's salts. Enciphered, a page number lands in
+    // 1..1000 with probability 2^-22 per frame.
+    var frames = 0;
+    for (var off = 32; off + 24 + 4096 <= w.length; off += 24 + 4096) {
+      frames++;
+      var pg = be32(w, off);
+      assert(!(pg >= 1 && pg <= 1000), "frame " + frames + ": page number " + pg + " in the clear");
+      var salts = true;
+      for (var i = 0; i < 8; i++) if (w[off + 8 + i] !== w[16 + i]) salts = false;
+      assert(!salts, "frame " + frames + ": salts in the clear");
+    }
+    assert(frames > 0, "no frames");
+  });
+
+  await test("REQ1/DUR-2 committed rows survive a worker terminated without close", async function() {
+    var db = await SQLCipher.open({filename: "/t21.db", key: "k21"});
+    await writeRows(db, 20);
+    await crash(db);
+    var db2 = await SQLCipher.open({filename: "/t21.db", key: "k21"});
+    var check = await db2.select("PRAGMA integrity_check");
+    assertEqual(check[0].integrity_check, "ok", "integrity_check");
+    var rows = await db2.select("SELECT count(*) AS n FROM t WHERE x = 'row ' || id");
+    assertEqual(rows[0].n, 20, "committed rows");
+    await db2.close();
+  });
+
+  await test("REQ1/DUR-2 opening with a wrong key keeps the WAL's commits", async function() {
+    var db = await SQLCipher.open({filename: "/t22.db", key: "k22"});
+    await writeRows(db, 20);
+    await crash(db);
+    var wrong = await SQLCipher.open({filename: "/t22.db", key: "not k22"});
+    await assertRejects(wrong.select("SELECT count(*) AS n FROM t"), /file is not a database/, "wrong key");
+    await wrong.close();
+    var db2 = await SQLCipher.open({filename: "/t22.db", key: "k22"});
+    var rows = await db2.select("SELECT count(*) AS n FROM t");
+    assertEqual(rows[0].n, 20, "committed rows after a wrong-key open");
+    await db2.close();
+  });
+
+  await test("REQ1/SHR-1 shred overwrites the stored -wal before removing it", async function() {
+    var db = await SQLCipher.open({filename: "/t23.db", key: "k23"});
+    var mode = db.mode;
+    await writeRows(db, 20);
+    await crash(db);
+    if (mode !== "opfs") { log("  (indexeddb: the WAL is never stored)"); return; }
+    var before = await readOpfs("t23.db-wal");
+    assert(before.length > 0, "-wal holds frames before shred");
+    var channel = new BroadcastChannel("wal-probe");
+    var probed = new Promise(function(resolve) {
+      channel.onmessage = function(e) { if (e.data.name === "t23.db-wal") resolve(e.data); };
+    });
+    // Reopening replays the WAL but writes nothing to it.
+    var db2 = await SQLCipher.open({filename: "/t23.db", key: "k23", workerUrl: "wal-probe-worker.js" + WORKER_QUERY});
+    await db2.shred();
+    var got = await Promise.race([probed, new Promise(function(r) { setTimeout(function() { r(null); }, 5000); })]);
+    channel.close();
+    assert(got, "shred did not remove the -wal");
+    assert(!got.error, "reading the -wal before removal: " + got.error);
+    assertEqual(got.bytes.length, before.length, "overwritten in full");
+    var same = 0;
+    for (var i = 0; i < before.length; i++) if (got.bytes[i] === before[i]) same++;
+    // Random bytes match the old ones at about 1 in 256 positions.
+    assert(same < before.length / 64, same + " of " + before.length + " bytes unchanged");
+    var root = await navigator.storage.getDirectory();
+    await assertRejects(root.getFileHandle("t23.db-wal"), /./, "the -wal is gone");
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
