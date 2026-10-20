@@ -3,7 +3,8 @@
 // Usage:  node tests/wasm/run-tests.mjs
 //
 // Expects sqlcipher.js, sqlcipher.wasm, sqlcipher-api.js, sqlcipher-worker.js,
-// and test.html to be co-located in the same directory as this script.
+// sqlcipher-4.0-testkey.db (from sqlcipher-resources/), and test.html to be
+// co-located in the same directory as this script.
 
 import { chromium } from "playwright";
 import { createServer } from "http";
