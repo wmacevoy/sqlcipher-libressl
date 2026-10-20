@@ -75,8 +75,9 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **LibreSSL from its GitHub release tarball** (`609e0a2d`, `4802d60d`, `6b8acee4`) — REQ1/LIB-1 —
   the OpenBSD mirror was unreliable from CI; the git repository lacks the generated CMake files;
   `curl`, because `gh` needs a token. Rejected: the mirror; `git clone`.
-- **`-s FILESYSTEM=1`** (`future-plan.md`) — LibreSSL's `libcrypto.a` references BIO socket symbols
-  at link time; about 50 KB of dead code.
+- **`-s FILESYSTEM=1`** (`fd2f7ef1`, in the plan file it added, since retired) — LibreSSL's
+  `libcrypto.a` references BIO socket symbols at link time; about 50 KB of dead code. The oo1 shim
+  also keeps its file in MEMFS through `Module.FS` *(inferred)*.
 - **The browser backends live in a Worker** (`106be6d4`) — REQ1/DUR-1 — `FileSystemSyncAccessHandle`
   exists only in workers *(inferred)*, and SQLite's VFS is synchronous.
 - **IndexedDB as 4 KB blocks, only dirty ones written** (`f5582a32`) — REQ1/DUR-1 — Rejected:
@@ -135,6 +136,8 @@ write first.
 
 ## Deferred
 
-- _Not yet: a GitHub Pages demo_ (`future-plan.md`) — trigger: the maintainer wants a public demo.
+- _Not yet: a GitHub Pages demo_ (`fd2f7ef1`) — `examples/web` served from Pages, built by a
+  `pages.yml` workflow (the `wasm` job's build, plus `.nojekyll`); trigger: the maintainer wants a
+  public demo.
 - _Not yet: multiple databases per worker_ — one worker per handle is simpler; trigger: memory cost
   of many workers.
