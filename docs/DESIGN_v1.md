@@ -183,6 +183,14 @@ Reasons are from the commit messages unless marked *(inferred)*
   read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
   [Scope decisions](REQUIREMENTS_v6.md#scope-decisions).
+- **The native build opens what the WASM build exports** (maintainer, 2026-10-20) — REQ1/EXP-1,
+  REQ1/FMT-1 — under WAL the newest rows sit in the `-wal` until `export()` checkpoints, and the
+  exported file is a WAL-mode file with no `-wal` beside it. `run-tests.mjs` saves each run's
+  export (`NATIVE_EXPORT_DIR`), and the wasm job compiles `tests/wasm/open-export.c` with the
+  amalgamation and native LibreSSL it already has and opens every file: `integrity_check`, WAL
+  mode, every row. This is the fork's own native code (upstream plus the two patches), not stock
+  SQLCipher, so the scope decision above stands. Rejected: a test hook in the worker to dump the
+  file (the API already returns the bytes); a separate CI job (it would rebuild LibreSSL).
 - **Drop the macos-x64 build** (maintainer, 2026-10-20) — REQ2/PLAT-1 — it was built on an arm64
   runner. Rejected: moving it to an Intel runner.
 - **No key means an unencrypted database** (maintainer, 2026-10-20) — REQ2/ENC-2 — compatible with

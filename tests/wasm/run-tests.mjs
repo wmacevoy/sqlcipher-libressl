@@ -10,10 +10,14 @@
 // in a fresh profile directory so no run sees another's storage. A run passes only if every test
 // passes and the page reports the mode it was asked for. Every browser and backend must pass;
 // a browser that fails to launch fails its runs.
+//
+// With NATIVE_EXPORT_DIR set, each run saves the bytes the REQ1/EXP-1 test's export()
+// returned there, as <browser>-<backend>.db, for CI to open with the native build
+// (tests/wasm/open-export.c).
 
 import { chromium, firefox, webkit } from "playwright";
 import { createServer } from "http";
-import { readFileSync, existsSync, mkdtempSync, rmSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, extname, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -81,6 +85,12 @@ async function runBackend(browserType, browserName, port, backend) {
     var failed = await page.getAttribute("#result", "data-failed");
     var mode   = await page.getAttribute("#result", "data-mode");
     var log    = await page.textContent("#log");
+    var exported = await page.evaluate(function() { return window.nativeExport || null; });
+    if (process.env.NATIVE_EXPORT_DIR && exported) {
+      mkdirSync(process.env.NATIVE_EXPORT_DIR, {recursive: true});
+      writeFileSync(join(process.env.NATIVE_EXPORT_DIR, browserName + "-" + backend + ".db"),
+                    Buffer.from(exported));
+    }
   } finally {
     await context.close();
     rmSync(profile, {recursive: true, force: true});
