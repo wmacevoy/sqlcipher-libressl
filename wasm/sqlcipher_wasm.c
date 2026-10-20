@@ -284,10 +284,18 @@ int wasm_db_key(sqlite3 *db, const char *key) {
 
 /* ── The WAL (the worker) ──────────────────────────────────── */
 
-/* walseal's key from SQLCipher's derived key; with no key, the WAL passes
-   through (walseal_sqlcipher.c).  Call after wasm_db_key, before any read. */
+/* walseal's key from SQLCipher's derived key, kept on that key when a
+   statement changes it; with no key, the WAL passes through
+   (walseal_sqlcipher.c).  Call after wasm_db_key, before any read. */
 int wasm_db_walseal_key(sqlite3 *db) {
-    return walseal_key_from_codec(db, "main");
+    int rc = walseal_key_from_codec(db, "main");
+    return rc == SQLITE_OK ? walseal_follow_codec(db, "main") : rc;
+}
+
+/* After each exec or select: 1 if it changed the key and the WAL was
+   checkpointed, 0 if not, -1 on error (walseal_codec_settle). */
+int wasm_db_walseal_settle(sqlite3 *db) {
+    return walseal_codec_settle(db);
 }
 
 /* Close without checkpointing or deleting the WAL.  Under a key that cannot
