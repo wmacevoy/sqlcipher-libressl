@@ -684,7 +684,7 @@
     return counted;
   }
 
-  // Builds the database in filename, runs steps (one exec each) with the kill armed at
+  // Builds the database in filename under CRASH_KEY, runs steps (one exec each) with the kill armed at
   // write killAt (0: never). Returns {died} if the worker was killed, else {count, before,
   // after, stepEnds}: stepEnds[j] is the number of writes when step j had finished.
   async function crashRun(filename, setup, steps, killAt) {
@@ -710,12 +710,12 @@
   // Opens filename with the ordinary worker. On OPFS the killed worker's access handle is
   // released some time after terminate(), and until then open fails; so retry, ending each
   // failed attempt's worker, which SQLCipher.open leaves running.
-  async function crashReopen(filename) {
+  async function crashReopen(filename, key) {
     var RealWorker = window.Worker;
     for (var attempt = 1; ; attempt++) {
       var made = null;
       window.Worker = function(url) { made = new RealWorker(url); return made; };
-      var opening = SQLCipher.open({filename: filename, key: CRASH_KEY});  // makes its worker at once
+      var opening = SQLCipher.open({filename: filename, key: key || CRASH_KEY});  // makes its worker at once
       window.Worker = RealWorker;
       try {
         var db = await opening;
@@ -729,9 +729,10 @@
     }
   }
 
-  // Reopens filename; outcome is "ok, before", "ok, after", or what is wrong.
-  async function crashCheck(filename, before, after) {
-    var db = await crashReopen(filename);
+  // Reopens filename (under key, default CRASH_KEY); outcome is "ok, before", "ok, after",
+  // or what is wrong.
+  async function crashCheck(filename, before, after, key) {
+    var db = await crashReopen(filename, key);
     var outcome;
     try {
       var check = await db.select("PRAGMA integrity_check");
@@ -797,6 +798,47 @@
     ]);
   });
 
+  // ── REQ1/DUR-2, REQ6/ENC-3: the key changed under the WAL ──
+  //
+  // PRAGMA rekey rewrites every page under the new key in one commit. The worker is killed
+  // at each write of that exec and of the next one (more rows). Until the rekey exec
+  // resolves, the database must open under the new key at a committed state, or failing
+  // that under the old key, as before. Once it has resolved, the new key must open every
+  // committed row and the old key must read nothing.
+
+  var REKEY_KEY = "crash-key-B";
+
+  await test("REQ1/DUR-2 worker killed at each write around PRAGMA rekey: the new key opens every committed row, the old key nothing", async function() {
+    var base = "/crash-rekey-";
+    var steps = ["PRAGMA rekey = '" + REKEY_KEY + "'",
+                 "INSERT INTO t SELECT id + 1000, 'new', zeroblob(1000) FROM t"];
+    var clean = await crashRun(base + "0.db", CRASH_SETUP, steps, 0);
+    var total = clean.count.writes, rekeyEnd = clean.stepEnds[0];
+    assert(total > rekeyEnd && rekeyEnd > 0, "writes: " + total + ", the rekey's: " + rekeyEnd);
+    var cleanNew = await crashCheck(base + "0.db", clean.before, clean.after, REKEY_KEY);
+    var cleanOld = await crashCheck(base + "0.db", clean.before, clean.after, CRASH_KEY);
+    assertEqual(cleanNew.outcome + " / " + cleanOld.outcome, "ok, after / error: file is not a database",
+                "no kill: new key / old key");
+    log("  rekey: " + total + " writes; the rekey exec ends after write " + rekeyEnd);
+    var bad = [];
+    for (var n = 1; n <= total; n++) {
+      var fn = base + n + ".db";
+      var r = await crashRun(fn, CRASH_SETUP, steps, n);
+      assert(r.died, "write " + n + ": the steps finished without reaching it");
+      // The new key first: opening under the old key can discard a WAL it cannot read.
+      var b = (await crashCheck(fn, clean.before, clean.after, REKEY_KEY)).outcome;
+      var a = (await crashCheck(fn, clean.before, clean.after, CRASH_KEY)).outcome;
+      var good = n > rekeyEnd
+        ? /^ok, (before|after)$/.test(b) && a === "error: file is not a database"
+        : (b === "ok, before" || (b === "error: file is not a database" && a === "ok, before")) &&
+          /^(ok, before|error: file is not a database)$/.test(a);
+      log("  rekey killed before write " + n + "/" + total + " (" + crashFile(clean.count.log[n - 1].name) +
+          "): new key " + b + "; old key " + a + (good ? "" : " -- BAD"));
+      if (!good) bad.push(n);
+    }
+    assert(bad.length === 0, bad.length + " of " + total + " kill points: before writes " + bad.join(", "));
+  });
+
   // ── The WAL on storage ─────────────────────────────────────
   //
   // A "crash" is the page terminating the handle's worker without close(),
@@ -846,7 +888,11 @@
     await writeRows(db, 20);
     await crash(db);
     if (mode !== "opfs") { log("  (indexeddb: the WAL is never stored)"); return; }
-    var w = await readOpfs("t20.db-wal");
+    assertWalSealed(await readOpfs("t20.db-wal"));
+  });
+
+  // A stored -wal with frames, and none of the header fields wal.c writes in the clear.
+  function assertWalSealed(w) {
     assert(w.length >= 32 + 24 + 4096, "-wal holds frames: " + w.length + " bytes");
     var magic = be32(w, 0);
     assert(magic !== 0x377f0682 && magic !== 0x377f0683, "WAL magic in the clear");
@@ -864,6 +910,26 @@
       assert(!salts, "frame " + frames + ": salts in the clear");
     }
     assert(frames > 0, "no frames");
+  }
+
+  await test("REQ6/ENC-3 after PRAGMA rekey the stored -wal is sealed under the new key", async function() {
+    var db = await SQLCipher.open({filename: "/t24.db", key: "k24"});
+    var mode = db.mode;
+    await writeRows(db, 10);
+    await db.exec("PRAGMA rekey = 'k24 new'");
+    for (var i = 11; i <= 20; i++) await db.exec("INSERT INTO t VALUES (?, ?)", [i, "row " + i]);
+    await crash(db);
+    if (mode === "opfs") assertWalSealed(await readOpfs("t24.db-wal"));
+    else log("  (indexeddb: the WAL is never stored)");
+    var db2 = await SQLCipher.open({filename: "/t24.db", key: "k24 new"});
+    var check = await db2.select("PRAGMA integrity_check");
+    assertEqual(check[0].integrity_check, "ok", "integrity_check under the new key");
+    var rows = await db2.select("SELECT count(*) AS n FROM t WHERE x = 'row ' || id");
+    assertEqual(rows[0].n, 20, "committed rows under the new key");
+    await db2.close();
+    var old = await SQLCipher.open({filename: "/t24.db", key: "k24"});
+    await assertRejects(old.select("SELECT count(*) AS n FROM t"), /file is not a database/, "the old key");
+    await old.close();
   });
 
   await test("REQ1/DUR-2 committed rows survive a worker terminated without close", async function() {
