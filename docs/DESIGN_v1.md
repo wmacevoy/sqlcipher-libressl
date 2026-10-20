@@ -84,8 +84,10 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **CI inputs name a release; the tarball and Playwright are exact** (QUEUE #7) — REQ1/LIB-1 —
   the tarball is checked against a committed SHA-256 and Playwright comes from a committed lock;
   runners and containers name an OS release and take its updates. Which input floats, and why, is
-  in CONTRIBUTING *Pinned and floating inputs*. Rejected: image digests and action commit SHAs,
-  which need a bot or regular hand edits to stay current.
+  in CONTRIBUTING *Pinned and floating inputs*. The two third-party actions are pinned
+  by commit SHA (maintainer, 2026-10-20): a moved tag elsewhere would run with the release job's
+  write access. Rejected: image digests and SHAs for GitHub's own actions, which need a bot or
+  regular hand edits to stay current.
 - **`-s FILESYSTEM=1`** (`fd2f7ef1`, in the plan file it added, since retired) — LibreSSL's
   `libcrypto.a` references BIO socket symbols at link time; about 50 KB of dead code. The oo1 shim
   also keeps its file in MEMFS through `Module.FS` *(inferred)*.

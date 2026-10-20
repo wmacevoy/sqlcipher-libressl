@@ -19,7 +19,7 @@ jobs:
   upstream-diff:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The checkout is shallow and has no upstream tags, so fetch just the tag.
       # git diff compares the two trees; no shared history is needed.
@@ -40,6 +40,8 @@ jobs:
 
   native:
     strategy:
+      # One platform's failure must not cancel the others: each result is evidence.
+      fail-fast: false
       matrix:
         include:
           # Debian (glibc) — works on Debian, Ubuntu, RHEL, etc.
@@ -53,7 +55,7 @@ jobs:
             deps: apt-get update && apt-get install -y gcc make cmake tcl tcl-dev curl ca-certificates
           # Alpine (musl) — works on Alpine, Docker scratch, etc.
           - os: ubuntu-24.04
-            container: alpine:3.19
+            container: alpine:3.24
             artifact: libsqlcipher-linux-musl-x64.a
             deps: apk add gcc make cmake musl-dev tcl tcl-dev curl
           # macOS
@@ -65,32 +67,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || null }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build deps
         if: matrix.deps != ''
         run: ${{ matrix.deps }}
 
       # LibreSSL (pinned in libressl.env), the release library, the smoke
-      # test and upstream's TCL suite, as a contributor runs them locally.
+      # test, walseal's checks and upstream's TCL suite, as a contributor runs
+      # them locally.
       # The suite runs on linux-glibc-x64 only: REQ1/UP-1 promises it there,
       # and it has never been run on the other platforms.
-      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 REQ1/UP-1 REQ1/FMT-1 check.sh
+      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 REQ1/DUR-2 REQ6/ENC-3 REQ1/UP-1 REQ1/FMT-1 check.sh
         run: ./check.sh
         env:
           CHECK_TCL: ${{ matrix.artifact == 'libsqlcipher-linux-glibc-x64.a' && 'yes' || 'no' }}
-
-      # walseal is compiled only into the WASM build; these check it natively,
-      # against this amalgamation and LibreSSL. One crash-replay seed keeps the
-      # step to minutes; the three of the source run locally (CONTRIBUTING).
-      # check.sh leaves the tree clean, so the amalgamation is made again here.
-      - name: REQ1/DUR-2 REQ6/ENC-3 walseal checks — I/O, leak, crash replay, derived key
-        if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
-        run: |
-          ./configure --with-tempstore=yes >/dev/null
-          make sqlite3.c >/dev/null
-          CC=gcc SEEDS=7 LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh all
-          make distclean >/dev/null
+          # One crash-replay seed keeps CI to minutes; all three run before a release.
+          SEEDS: '7'
 
       # check.sh keeps the release build as libsqlcipher.a; the TCL suite's
       # test-only build never replaces it.
@@ -128,7 +121,7 @@ jobs:
           fi
           echo "PASS: REQ2/PLAT-1 $a is $want"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -136,7 +129,7 @@ jobs:
   wasm:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build deps
         run: |
@@ -144,7 +137,7 @@ jobs:
           sudo apt-get install -y tcl cmake
 
       - name: Install Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984   # v16
         with:
           version: 3.1.74
 
@@ -179,7 +172,7 @@ jobs:
           ./build-sqlcipher-libressl.sh
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -213,7 +206,7 @@ jobs:
           ls -lh wasm/dist/sqlcipher-wasm-static.tar.gz
 
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sqlcipher-wasm
           path: |
@@ -232,10 +225,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -247,7 +240,7 @@ jobs:
           ls -lh dist/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64   # v3.0.3
         with:
           generate_release_notes: true
           files: |
