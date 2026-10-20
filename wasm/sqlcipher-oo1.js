@@ -50,6 +50,8 @@ function DB(Module, opts, flagsArg, vfsArg) {
     readonly:         Module.cwrap("wasm_stmt_readonly",            "number",  ["number"]),
     bind_text:        Module.cwrap("wasm_stmt_bind_text",           null,      ["number", "number", "string"]),
     bind_int:         Module.cwrap("wasm_stmt_bind_int",            null,      ["number", "number", "number"]),
+    bind_int64:       Module.cwrap("wasm_stmt_bind_int64",          null,      ["number", "number", "number"]),
+    bind_int64_text:  Module.cwrap("wasm_stmt_bind_int64_text",     null,      ["number", "number", "string"]),
     bind_double:      Module.cwrap("wasm_stmt_bind_double",         null,      ["number", "number", "number"]),
     bind_null:        Module.cwrap("wasm_stmt_bind_null",           null,      ["number", "number"]),
     bind_blob:        Module.cwrap("wasm_stmt_bind_blob",           null,      ["number", "number", "number", "number"]),
@@ -59,19 +61,24 @@ function DB(Module, opts, flagsArg, vfsArg) {
     columns:          Module.cwrap("wasm_stmt_columns",             "number",  ["number"]),
     colname:          Module.cwrap("wasm_stmt_colname",             "string",  ["number", "number"]),
     coltype:          Module.cwrap("wasm_stmt_coltype",             "number",  ["number", "number"]),
-    col_int:          Module.cwrap("wasm_stmt_int",                 "number",  ["number", "number"]),
+    col_int64:        Module.cwrap("wasm_stmt_int64",               "number",  ["number", "number"]),
+    col_int64_text:   Module.cwrap("wasm_stmt_int64_text",          "string",  ["number", "number"]),
     col_double:       Module.cwrap("wasm_stmt_double",              "number",  ["number", "number"]),
     col_text:         Module.cwrap("wasm_stmt_text",                "string",  ["number", "number"]),
     col_blob:         Module.cwrap("wasm_stmt_blob",                "number",  ["number", "number"]),
     col_bytes:        Module.cwrap("wasm_stmt_bytes",               "number",  ["number", "number"]),
     value_type:       Module.cwrap("wasm_value_type",               "number",  ["number", "number"]),
     value_double:     Module.cwrap("wasm_value_double",             "number",  ["number", "number"]),
+    value_int64:      Module.cwrap("wasm_value_int64",              "number",  ["number", "number"]),
+    value_int64_text: Module.cwrap("wasm_value_int64_text",         "string",  ["number", "number"]),
     value_text:       Module.cwrap("wasm_value_text",               "string",  ["number", "number"]),
     value_blob:       Module.cwrap("wasm_value_blob",               "number",  ["number", "number"]),
     value_bytes:      Module.cwrap("wasm_value_bytes",              "number",  ["number", "number"]),
     result_null:      Module.cwrap("wasm_result_null",              null,      ["number"]),
     result_int:       Module.cwrap("wasm_result_int",               null,      ["number", "number"]),
     result_double:    Module.cwrap("wasm_result_double",            null,      ["number", "number"]),
+    result_int64:     Module.cwrap("wasm_result_int64",             null,      ["number", "number"]),
+    result_int64_text:Module.cwrap("wasm_result_int64_text",        null,      ["number", "string"]),
     result_text:      Module.cwrap("wasm_result_text",              null,      ["number", "string"]),
     result_blob:      Module.cwrap("wasm_result_blob",              null,      ["number", "number", "number"]),
     result_error:     Module.cwrap("wasm_result_error",             null,      ["number", "string"])
@@ -480,7 +487,11 @@ function DB(Module, opts, flagsArg, vfsArg) {
 
   function _readValue(argv, i) {
     var type = _api.value_type(argv, i);
-    if (type === 1 || type === 2) return _api.value_double(argv, i);  // INTEGER, FLOAT
+    if (type === 1) {                                                   // INTEGER
+      var d = _api.value_int64(argv, i);
+      return Number.isSafeInteger(d) ? d : BigInt(_api.value_int64_text(argv, i));
+    }
+    if (type === 2) return _api.value_double(argv, i);                 // FLOAT
     if (type === 3) return _api.value_text(argv, i);                   // TEXT
     if (type === 4) {                                                   // BLOB
       var p = _api.value_blob(argv, i), n = _api.value_bytes(argv, i);
@@ -494,8 +505,10 @@ function DB(Module, opts, flagsArg, vfsArg) {
     if (v === null || v === undefined) {
       _api.result_null(ctx);
     } else if (typeof v === "number") {
-      if (v === (v | 0)) _api.result_int(ctx, v);
+      if (Number.isSafeInteger(v)) _api.result_int64(ctx, v);
       else _api.result_double(ctx, v);
+    } else if (typeof v === "bigint") {
+      _api.result_int64_text(ctx, DB._int64Text(v));
     } else if (typeof v === "boolean") {
       _api.result_int(ctx, v ? 1 : 0);
     } else if (ArrayBuffer.isView(v)) {
@@ -569,11 +582,13 @@ function DB(Module, opts, flagsArg, vfsArg) {
     if (v === null || v === undefined) {
       _api.bind_null(ptr, idx);
     } else if (typeof v === "number") {
-      if (v === (v | 0) && v >= -2147483648 && v <= 2147483647) {
-        _api.bind_int(ptr, idx, v);
+      if (Number.isSafeInteger(v)) {
+        _api.bind_int64(ptr, idx, v);
       } else {
         _api.bind_double(ptr, idx, v);
       }
+    } else if (typeof v === "bigint") {
+      _api.bind_int64_text(ptr, idx, DB._int64Text(v));
     } else if (typeof v === "boolean") {
       _api.bind_int(ptr, idx, v ? 1 : 0);
     } else if (v instanceof Uint8Array) {
@@ -704,7 +719,7 @@ function DB(Module, opts, flagsArg, vfsArg) {
   Stmt.prototype.getInt = function(ndx) {
     this.affirmNotFinalized();
     if (_api.coltype(this.pointer, ndx) === 5) return null;
-    return _api.col_int(this.pointer, ndx);
+    return _colInt64(this.pointer, ndx);
   };
 
   Stmt.prototype.getFloat = function(ndx) {
@@ -751,11 +766,17 @@ function DB(Module, opts, flagsArg, vfsArg) {
 
   function _readCol(ptr, c) {
     var type = _api.coltype(ptr, c);
-    if (type === 1) return _api.col_int(ptr, c);    // INTEGER
+    if (type === 1) return _colInt64(ptr, c);       // INTEGER
     if (type === 2) return _api.col_double(ptr, c);  // FLOAT
     if (type === 3) return _api.col_text(ptr, c);    // TEXT
     if (type === 4) return _readBlob(ptr, c);        // BLOB
     return null;                                      // NULL
+  }
+
+  // A number while it is a safe integer, else a BigInt (REQ5/INT-1).
+  function _colInt64(ptr, c) {
+    var d = _api.col_int64(ptr, c);
+    return Number.isSafeInteger(d) ? d : BigInt(_api.col_int64_text(ptr, c));
   }
 
   function _readBlob(ptr, c) {
@@ -849,6 +870,13 @@ DB._rawKey = function(hex) {
     throw new Error("DB: a raw key is 32 bytes (64 hex digits), or 48 with its salt (96); got " +
                     hex.length + " characters");
   return "x'" + hex + "'";
+};
+
+// A BigInt's decimal text for the C helpers, which parse it as an int64.
+DB._int64Text = function(v) {
+  if (v < BigInt("-9223372036854775808") || v > BigInt("9223372036854775807"))
+    throw new RangeError("BigInt beyond 64 bits: " + v);
+  return v.toString();
 };
 
 // SQL as a string, an array of strings (joined without separators), or UTF-8 bytes.

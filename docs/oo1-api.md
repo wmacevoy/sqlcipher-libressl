@@ -369,11 +369,12 @@ with its prefix (e.g. `"$name"`, `":name"`, `"@name"`).
 
 A name the statement does not have throws.
 
-**Bindable types:** `null` and `undefined` (bound as NULL), `number` (an
-integer within 32 bits as INTEGER, anything else as REAL), `string`,
-`boolean` (bound as 0/1), `Uint8Array` (bound as blob; for other typed
-arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).  Anything else,
-including a `BigInt`, binds as its `String()` text.
+**Bindable types:** `null` and `undefined` (bound as NULL), `number` (a
+safe integer, `Number.isSafeInteger()`, as INTEGER; anything else as
+REAL), `BigInt` (as INTEGER; beyond 64 bits throws a `RangeError`),
+`string`, `boolean` (bound as 0/1), `Uint8Array` (bound as blob; for
+other typed arrays, or a string's UTF-8 bytes, use `bindAsBlob()`).
+Anything else binds as its `String()` text.
 
 ---
 
@@ -428,7 +429,10 @@ Returns the value at the given column, coerced to `asType`, given as the
 (`SQLITE_TEXT`), or `4` (`SQLITE_BLOB`).  A NULL column is `null` whatever
 the type; another code throws.
 
-Integers are read as 32-bit (`sqlite3_column_int()`).
+Integers are read as 64-bit: a `number` while the value is a safe
+integer (|v| ≤ 2^53 − 1), a `BigInt` beyond that, so every value comes
+back exactly.  The same holds for the arguments of a `createFunction`
+callback, and a callback may return a `BigInt`.
 
 ---
 
@@ -616,8 +620,8 @@ Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array; a `Uint8Array` binds as a BLOB. |
-| `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). BLOB columns are `Uint8Array`s. |
+| `exec(sql, bind?)` | `Promise<{changes}>` | Execute DDL / DML. `bind` is a positional array; a `Uint8Array` binds as a BLOB, a safe-integer `number` or a `BigInt` as an INTEGER (a `BigInt` beyond 64 bits rejects). |
+| `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). BLOB columns are `Uint8Array`s; integers are `number`s while safe, `BigInt`s beyond 2^53 − 1. |
 | `flush()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
 | `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
@@ -811,7 +815,7 @@ await db.close();  // this now shreds instead of saving
 | Encryption | Not available (plain SQLite) | `key`, `textkey`, `hexkey` constructor options (SQLCipher / LibreSSL); a string `key` is a passphrase |
 | Errors | `SQLite3Error` | `Error`, with SQLite's message |
 | `pCtx` for aggregates | raw `sqlite3_context*`; state via `sqlite3_aggregate_context()` | a per-group key (see `createFunction`) |
-| 64-bit values | `BigInt` binding, `changes(total, true)` | not in this build: `get()` reads integers as 32-bit, a `BigInt` binds as text |
+| 64-bit values | `BigInt` binding and results, `changes(total, true)` | `BigInt` binding and results, as upstream; no 64-bit `changes()` |
 | SQL as a WASM pointer | Accepted | Not accepted |
 | `capi`, `wasm`, `Stmt` constructor | Exposed | Not exposed |
 | `OpfsDb`, `JsStorageDb`, kvvfs (`":localStorage:"`) | Available | Not implemented; for persistence use `save()` / `DB.load()`, or the unified API |

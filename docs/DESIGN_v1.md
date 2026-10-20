@@ -104,6 +104,11 @@ Reasons are from the commit messages unless marked *(inferred)*
   Aggregate and window callbacks get a key from `sqlite3_aggregate_context()` where upstream passes
   `pCtx`, because SQLite calls `xFinal` and `xValue` with a context of their own
   (`sqlite3VdbeMemFinalize`), so `pCtx` cannot key per-group state.
+- **64-bit integers cross the WASM boundary as a double or as decimal text** (PR #6) — REQ5/INT-1
+  — the C helpers return `sqlite3_column_int64` as a double, exact below 2^53, and the JS side
+  asks for the decimal text only when the double is not a safe integer; a `BigInt` goes in as
+  text. Rejected: `-s WASM_BIGINT`, which changes how every `i64` crosses `cwrap` for both the
+  worker and the shim, for a case the text path already covers.
 - **The oo1 shim's string `key` stays a passphrase** (PR #5, *inferred*; REQUIREMENTS_v4
   *Assumptions*) — REQ4/OO1-2 — the shim always applied it with `sqlite3_key`, as the unified API
   does. Rejected: the reference's old description (UTF-8 bytes as a raw key), under which a

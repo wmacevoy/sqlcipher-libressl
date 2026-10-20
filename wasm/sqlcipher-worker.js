@@ -309,13 +309,16 @@ async function init() {
     step:       Module.cwrap("wasm_stmt_step",          "number",  ["number"]),
     bind_text:  Module.cwrap("wasm_stmt_bind_text",     null,      ["number", "number", "string"]),
     bind_int:   Module.cwrap("wasm_stmt_bind_int",      null,      ["number", "number", "number"]),
+    bind_int64: Module.cwrap("wasm_stmt_bind_int64",    null,      ["number", "number", "number"]),
+    bind_int64_text: Module.cwrap("wasm_stmt_bind_int64_text", null, ["number", "number", "string"]),
     bind_dbl:   Module.cwrap("wasm_stmt_bind_double",   null,      ["number", "number", "number"]),
     bind_null:  Module.cwrap("wasm_stmt_bind_null",     null,      ["number", "number"]),
     bind_blob:  Module.cwrap("wasm_stmt_bind_blob",     null,      ["number", "number", "number", "number"]),
     columns:    Module.cwrap("wasm_stmt_columns",       "number",  ["number"]),
     colname:    Module.cwrap("wasm_stmt_colname",       "string",  ["number", "number"]),
     coltype:    Module.cwrap("wasm_stmt_coltype",       "number",  ["number", "number"]),
-    col_int:    Module.cwrap("wasm_stmt_int",           "number",  ["number", "number"]),
+    col_int64:  Module.cwrap("wasm_stmt_int64",         "number",  ["number", "number"]),
+    col_int64_text: Module.cwrap("wasm_stmt_int64_text", "string", ["number", "number"]),
     col_dbl:    Module.cwrap("wasm_stmt_double",        "number",  ["number", "number"]),
     col_text:   Module.cwrap("wasm_stmt_text",          "string",  ["number", "number"]),
     col_blob:   Module.cwrap("wasm_stmt_blob",          "number",  ["number", "number"]),
@@ -332,14 +335,21 @@ function _bind(stmt, args) {
     var v = args[i], idx = i + 1;
     if (v === null || v === undefined)       _api.bind_null(stmt, idx);
     else if (typeof v === "number") {
-      if (v === (v | 0) && v >= -2147483648 && v <= 2147483647)
-           _api.bind_int(stmt, idx, v);
-      else _api.bind_dbl(stmt, idx, v);
+      if (Number.isSafeInteger(v)) _api.bind_int64(stmt, idx, v);
+      else                         _api.bind_dbl(stmt, idx, v);
     }
+    else if (typeof v === "bigint")          _api.bind_int64_text(stmt, idx, _int64Text(v));
     else if (typeof v === "boolean")         _api.bind_int(stmt, idx, v ? 1 : 0);
     else if (v instanceof Uint8Array)        _bindBlob(stmt, idx, v);
     else                                     _api.bind_text(stmt, idx, String(v));
   }
+}
+
+// A BigInt's decimal text for the C helper, which parses it as an int64.
+function _int64Text(v) {
+  if (v < BigInt("-9223372036854775808") || v > BigInt("9223372036854775807"))
+    throw new RangeError("BigInt beyond 64 bits: " + v);
+  return v.toString();
 }
 
 function _bindBlob(stmt, idx, bytes) {
@@ -361,7 +371,11 @@ function _query(sql, bind) {
     var row = {};
     for (var j = 0; j < cols; j++) {
       var t = _api.coltype(stmt, j);
-      if      (t === 1) row[names[j]] = _api.col_int(stmt, j);
+      if      (t === 1) {
+        // A number while it is a safe integer, else a BigInt (REQ5/INT-1).
+        var d = _api.col_int64(stmt, j);
+        row[names[j]] = Number.isSafeInteger(d) ? d : BigInt(_api.col_int64_text(stmt, j));
+      }
       else if (t === 2) row[names[j]] = _api.col_dbl(stmt, j);
       else if (t === 3) row[names[j]] = _api.col_text(stmt, j);
       else if (t === 4) {
