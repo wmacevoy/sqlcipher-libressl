@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v1](REQUIREMENTS_v1.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v2](REQUIREMENTS_v2.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -55,7 +55,9 @@ worker at any moment. DUR-2 depends on what is in memory when that happens; see 
   that data. The OPFS path layout is the same kind of door.
 - **Release artifact names.** Downstream builds fetch them by name.
 
-Reviewed by: _nobody independent yet_.
+Today every downstream is the maintainer's own project, in development (REQUIREMENTS_v2), so these
+doors are cheaper than they look until an outside project depends on them — whether that makes them
+free to change now is an open question there. Reviewed by: _nobody independent yet_.
 
 ## Decisions
 
@@ -90,7 +92,11 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **The TCL suite has its own configure, after the release `.a` is uploaded** (PR #1) — REQ1/UP-1
   — `-DSQLCIPHER_TEST` must not ship.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v1.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v2.md#scope-decisions).
+- **Drop the macos-x64 build** (maintainer, 2026-10-20) — REQ2/PLAT-1 — it was built on an arm64
+  runner. Rejected: moving it to an Intel runner.
+- **No key means an unencrypted database** (maintainer, 2026-10-20) — REQ2/ENC-2 — compatible with
+  SQLCipher; a hard call. Rejected: rejecting `open()` without a key.
 
 ## Known hazards
 
@@ -107,8 +113,8 @@ write first.
   anything else, error included; the worker loops until 0 and resolves `ok`. A constraint violation
   succeeds silently (contradicts REQ1/ERR-1). `select` likewise returns the rows read before an
   error.
-- **No BLOBs.** Binding a `Uint8Array` stores its text; reading a BLOB column gives `null`.
-- **A missing key means an unencrypted database**, silently.
+- **No BLOBs yet.** Binding a `Uint8Array` stores its text; reading a BLOB column gives `null`
+  (contradicts REQ2/API-2).
 - **A failed flush leaves memory ahead of storage.** The statement has already applied in the
   worker; the promise rejects; nothing rolls the memory copy back.
 
