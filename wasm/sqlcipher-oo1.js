@@ -230,7 +230,7 @@ function DB(Module, opts, flagsArg, vfsArg) {
         if (!stmtPtr) continue;   // whitespace or a comment
         var stmt = _wrap(stmtPtr);
         try {
-          if (saveSql) saveSql.push(_api.sql(stmtPtr));
+          if (saveSql) saveSql.push(_api.sql(stmtPtr).trim());
           if (bind !== undefined && bind !== null && stmt.parameterCount) {
             stmt.bind(bind);
             bind = null;
@@ -299,7 +299,8 @@ function DB(Module, opts, flagsArg, vfsArg) {
   };
 
   function _wrap(ptr) {
-    if (_trace) console.log("SQL TRACE: " + _api.sql(ptr));
+    // sqlite3_sql() is the text as written: the leading space and the ";" too.
+    if (_trace) console.log("SQL TRACE: " + _api.sql(ptr).trim());
     var stmt = new Stmt(ptr);
     _stmts[ptr] = stmt;
     return stmt;
