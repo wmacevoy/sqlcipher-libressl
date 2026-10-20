@@ -55,9 +55,9 @@ worker at any moment. DUR-2 depends on what is in memory when that happens; see 
   that data. The OPFS path layout is the same kind of door.
 - **Release artifact names.** Downstream builds fetch them by name.
 
-Today every downstream is the maintainer's own project, in development (REQUIREMENTS_v2), so these
-doors are cheaper than they look until an outside project depends on them — whether that makes them
-free to change now is an open question there. Reviewed by: _nobody independent yet_.
+Today every downstream is the maintainer's own project, in development, so these doors are cheap to
+change for now (maintainer, 2026-10-20; REQUIREMENTS_v2 *Assumptions*). They close when an outside
+project depends on them. Reviewed by: _nobody independent yet_.
 
 ## Decisions
 

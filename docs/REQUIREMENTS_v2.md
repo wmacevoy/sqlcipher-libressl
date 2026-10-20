@@ -134,7 +134,7 @@ browser with no server, has no lighter option. *(Inferred — see Assumptions.)*
   downstreams are the maintainer's own projects, all in development (2026-10-20).
 - "So until an outside project depends on this, the API, the worker protocol and the IndexedDB
   layout can still change without expand-then-contract (DESIGN *One-way doors*). True?" —
-  _inferred from the answer above; …_
+  yes, cheap to change for now (2026-10-20).
 - "These patches are not meant to go upstream." — _…_
 
 ## Scope decisions
