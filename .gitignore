@@ -37,6 +37,8 @@ xcuserdata/*
 /sqlcipher.pc
 /sqlite3ext.h
 /libsqlcipher.la
+/libsqlcipher.a
+/example_basic
 /.DS_Store
 examples/web/sqlcipher*
 examples/web/sqlcipher-oo1.js
