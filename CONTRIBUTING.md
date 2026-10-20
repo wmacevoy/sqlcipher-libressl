@@ -85,7 +85,7 @@ cd test && ../testfixture sqlcipher.test     # ends "0 errors out of 208 tests"
 # Browser tests: copy the build and the fixture next to the runner, then run it
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    wasm/dist/sqlcipher-worker.js wasm/dist/sqlcipher-oo1.js \
-   sqlcipher-resources/sqlcipher-4.0-testkey.db tests/wasm/
+   sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
 (cd tests/wasm && npm init -y >/dev/null && npm install playwright && npx playwright install chromium)
 node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 failed -- PASS"
 ```

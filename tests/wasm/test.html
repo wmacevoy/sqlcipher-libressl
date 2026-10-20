@@ -234,6 +234,262 @@
     db.close();
   });
 
+  // ── oo1 shim: everything docs/oo1-api.md says ─────────────
+
+  function assertThrows(fn, pattern, msg) {
+    try { fn(); } catch (e) {
+      assert(pattern.test(e.message), msg + ": threw \"" + e.message + "\", want " + pattern);
+      return;
+    }
+    throw new Error(msg + ": did not throw");
+  }
+
+  await test("REQ4/OO1-2 every method docs/oo1-api.md lists exists", async function() {
+    var resp = await fetch("oo1-api.md");
+    assert(resp.ok, "oo1-api.md fetch: HTTP " + resp.status);
+    var md = await resp.text();
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    var stmt = db.prepare("SELECT 1");
+    var objs = {DB: db, Stmt: stmt}, seen = 0, missing = [];
+    var re = /^### (DB|Stmt)\.prototype\.(\w+)/gm, m;
+    while ((m = re.exec(md))) {
+      seen++;
+      if (typeof objs[m[1]][m[2]] !== "function") missing.push(m[1] + "." + m[2]);
+    }
+    stmt.finalize();
+    db.close();
+    assert(seen > 40, "found only " + seen + " documented methods");
+    assertEqual(missing.join(", "), "", "documented but missing");
+  });
+
+  await test("REQ4/OO1-2 constructor: positional, flags, vfs, open errors", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module, "/flags.db", "c");
+    db.exec("CREATE TABLE t (x)");
+    assertEqual(db.dbFilename(), "/flags.db", "dbFilename");
+    assert(typeof db.dbVfsName() === "string" && db.dbVfsName().length > 0, "dbVfsName: " + db.dbVfsName());
+    db.close();
+
+    var ro = new DB(Module, {filename: "/flags.db", flags: "r"});
+    assertThrows(function() { ro.exec("INSERT INTO t VALUES (1)"); }, /readonly/, "write under flags r");
+    ro.close();
+
+    var w = new DB(Module, "/flags.db", "w", "unix-none");
+    assertEqual(w.dbVfsName(), "unix-none", "vfs");
+    w.exec("INSERT INTO t VALUES (1)");
+    w.close();
+
+    assertThrows(function() { new DB(Module, "/absent.db", "w"); }, /unable to open/, "flags w, no file");
+    assertThrows(function() { new DB(Module, {filename: ":memory:", vfs: "no-such-vfs"}); }, /no such vfs/, "bad vfs");
+    assertThrows(function() { new DB(Module, ":memory:", "cx"); }, /unknown flag/, "bad flag");
+  });
+
+  await test("REQ4/OO1-2 constructor: key, textkey, hexkey", async function() {
+    var Module = await initSqlcipher();
+    var raw = new Uint8Array(32);
+    for (var i = 0; i < 32; i++) raw[i] = i * 7 + 1;
+    var hex = "";
+    for (var j = 0; j < 32; j++) hex += (raw[j] < 16 ? "0" : "") + raw[j].toString(16);
+
+    var a = new DB(Module, {filename: "/raw.db", hexkey: hex});
+    a.exec("CREATE TABLE t (x); INSERT INTO t VALUES ('raw')");
+    a.close();
+    var b = new DB(Module, {filename: "/raw.db", key: raw});
+    assertEqual(b.selectValue("SELECT x FROM t"), "raw", "key bytes = hexkey");
+    b.close();
+    var c = new DB(Module, {filename: "/raw.db", key: hex});   // a string key is a passphrase
+    assertThrows(function() { c.selectValue("SELECT x FROM t"); }, /file is not a database/, "hex as passphrase");
+    c.close();
+
+    var d = new DB(Module, {filename: "/text.db", textkey: "pw"});
+    d.exec("CREATE TABLE t (x); INSERT INTO t VALUES ('text')");
+    d.close();
+    var e = new DB(Module, {filename: "/text.db", key: "pw"});
+    assertEqual(e.selectValue("SELECT x FROM t"), "text", "textkey = key");
+    e.close();
+
+    assertThrows(function() { new DB(Module, {key: "a", hexkey: hex}); }, /only one of/, "two keys");
+    assertThrows(function() { new DB(Module, {hexkey: "abc"}); }, /raw key is 32 bytes/, "short hexkey");
+    assertThrows(function() { new DB(Module, {key: new Uint8Array(16)}); }, /raw key is 32 bytes/, "short key bytes");
+  });
+
+  await test("REQ4/OO1-2 exec: every statement, sql forms, options", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES (1, 'a');" +
+            " -- a comment\n INSERT INTO t VALUES (2, 'b');");
+    assertEqual(db.selectValue("SELECT count(*) FROM t"), 2, "multi-statement string");
+    db.exec(["INSERT INTO t VALUES (3, ", "'c')"]);
+    db.exec(new TextEncoder().encode("INSERT INTO t VALUES (4, 'd')"));
+    assertEqual(db.selectValue("SELECT count(*) FROM t"), 4, "array and Uint8Array sql");
+
+    db.exec("SELECT 1; INSERT INTO t VALUES (?, ?)", {bind: [5, "e"]});
+    assertEqual(db.selectValue("SELECT name FROM t WHERE id = 5"), "e", "bind goes to the first statement with parameters");
+
+    var names = [], seen = [];
+    var rows = db.exec({
+      sql: "SELECT id, name FROM t WHERE id < 3 ORDER BY id; SELECT name FROM t WHERE id = 4",
+      rowMode: "$name", columnNames: names, returnValue: "resultRows",
+      callback: function(row) { seen.push(row); }
+    });
+    assertEqual(JSON.stringify(rows), '["a","b","d"]', "rows of every statement, rowMode $name");
+    assertEqual(JSON.stringify(seen), '["a","b","d"]', "callback");
+    assertEqual(JSON.stringify(names), '["id","name"]', "columnNames from the first statement");
+
+    var sql = db.exec({sql: "SELECT 1; SELECT 2", returnValue: "saveSql"});
+    assertEqual(JSON.stringify(sql), '["SELECT 1","SELECT 2"]', "saveSql");
+
+    var stopped = [];
+    db.exec({sql: "SELECT id FROM t ORDER BY id", rowMode: 0,
+             callback: function(v) { stopped.push(v); return v < 2 ? undefined : false; }});
+    assertEqual(JSON.stringify(stopped), "[1,2]", "callback returning false stops");
+
+    assertThrows(function() { db.exec("INSERT INTO t VALUES (?, 'dup')", {bind: [1]}); },
+                 /UNIQUE constraint failed/, "a failing step throws");
+    assertThrows(function() { db.exec({sql: "SELECT 1", rowMode: "stmt", resultRows: []}); },
+                 /rowMode 'stmt'/, "rowMode stmt with resultRows");
+    assertThrows(function() { db.exec({sql: "SELECT 1 AS x", rowMode: "$y", callback: function() {}}); },
+                 /no such column/, "rowMode $missing");
+    assertEqual(db.exec("SELECT 1"), db, "returns this");
+    db.close();
+  });
+
+  await test("REQ4/OO1-2 select shortcuts and get() with asType", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    assertEqual(db.selectValue("SELECT 42", undefined, 3), "42", "selectValue asType TEXT");
+    assertEqual(JSON.stringify(db.selectValues("SELECT 1.5 UNION ALL SELECT 2.5", null, 1)), "[1,2]",
+                "selectValues asType INTEGER");
+    assertEqual(db.selectValue("SELECT 1 WHERE 0"), undefined, "selectValue, no row");
+
+    var st = db.prepare("SELECT 7, NULL, '{\"a\":[1,2]}', x'00ff'");
+    assert(st.step(), "row");
+    assertEqual(st.get(0, 2), 7, "get FLOAT");
+    assertEqual(st.get(0, 3), "7", "get TEXT");
+    assertBytes(st.get(3, 4), new Uint8Array([0, 255]), "get BLOB");
+    assertEqual(st.getInt(1), null, "getInt NULL");
+    assertEqual(st.getFloat(1), null, "getFloat NULL");
+    assertEqual(st.getString(1), null, "getString NULL");
+    assertEqual(st.getJSON(1), null, "getJSON NULL");
+    assertEqual(st.getJSON(2).a[1], 2, "getJSON");
+    assertThrows(function() { st.get(0, 9); }, /unknown type/, "bad asType");
+    st.finalize();
+    db.close();
+  });
+
+  await test("REQ4/OO1-2 Stmt: named parameters, metadata, lifecycle", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    db.exec("CREATE TABLE t (a, b, c)");
+    var ins = db.prepare("INSERT INTO t VALUES ($a, :b, @c)");
+    assertEqual(ins.db, db, "stmt.db");
+    assertEqual(ins.getParamIndex(":b"), 2, "getParamIndex");
+    assertEqual(ins.getParamIndex(":nope"), 0, "getParamIndex, absent");
+    assertEqual(ins.getParamName(3), "@c", "getParamName");
+    assertEqual(ins.getParamName(9), null, "getParamName, absent");
+    assertEqual(ins.isReadOnly(), false, "INSERT isReadOnly");
+    ins.bind({$a: 1, ":b": "two", "@c": null}).stepReset();
+    ins.bind("$a", 4).bind(":b", "five").bindAsBlob("@c", "six").stepReset();
+    assertThrows(function() { ins.bind({$zz: 1}); }, /no such parameter/, "unknown name");
+    assertEqual(db.openStatementCount(), 1, "openStatementCount");
+
+    var sel = db.prepare("SELECT a, b, typeof(c) FROM t ORDER BY a");
+    assertEqual(sel.isReadOnly(), true, "SELECT isReadOnly");
+    assertEqual(db.openStatementCount(), 2, "openStatementCount, two");
+    assert(sel.step() && sel.isBusy(), "busy after a row");
+    assertEqual(JSON.stringify(sel.get([])), '[1,"two","null"]', "row 1");
+    assert(sel.step(), "row 2");
+    assertEqual(JSON.stringify(sel.get([])), '[4,"five","blob"]', "row 2");
+    assert(!sel.step() && !sel.isBusy(), "done");
+    assertEqual(sel.finalize(), 0, "finalize returns 0");
+    assertEqual(sel.finalize(), undefined, "second finalize");
+    assertEqual(sel.pointer, undefined, "pointer after finalize");
+
+    var bad = db.prepare("INSERT INTO t VALUES (abs(-9223372036854775807 - 1), 0, 0)");
+    assertThrows(function() { bad.stepFinalize(); }, /integer overflow/, "stepFinalize throws");
+    assertEqual(bad.pointer, undefined, "stepFinalize finalized anyway");
+    assertThrows(function() { db.prepare("  -- nothing "); }, /no SQL statement/, "empty prepare");
+
+    db.close();
+    assertEqual(ins.pointer, undefined, "close finalized the open statement");
+    assertEqual(ins.finalize(), undefined, "finalize after close is a no-op");
+  });
+
+  await test("REQ4/OO1-2 DB: checkRc, dbName, onclose, trace", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    assertEqual(db.checkRc(0), db, "checkRc(0)");
+    assertThrows(function() { db.checkRc(1); }, /result code 1/, "checkRc(1)");
+    db.exec("ATTACH ':memory:' AS aux");
+    assertEqual(db.dbName(), "main", "dbName()");
+    assertEqual(db.dbName(2), "aux", "dbName(2)");   // 0 main, 1 temp, 2 the first attached
+    assertEqual(db.dbName(9), null, "dbName, absent");
+    assertEqual(db.dbFilename(":memory:"), null, "dbFilename, no such database");
+
+    var calls = [];
+    db.onclose = {
+      before: function() { calls.push("before"); throw new Error("ignored"); },
+      after: [function(d) { calls.push(d === db ? "after" : "?"); }]
+    };
+    db.close();
+    assertEqual(calls.join(","), "before,after", "onclose");
+    assertEqual(db.isOpen(), false, "closed");
+
+    var logged = [], realLog = console.log;
+    console.log = function(m) { logged.push(String(m)); };
+    try {
+      var t = new DB(Module, ":memory:", "ct");
+      t.exec("SELECT 1; SELECT 2");
+      t.close();
+    } finally {
+      console.log = realLog;
+    }
+    assertEqual(JSON.stringify(logged), '["SQL TRACE: SELECT 1","SQL TRACE: SELECT 2"]', "flag t");
+  });
+
+  await test("REQ4/OO1-2 createFunction: scalar, aggregate, window", async function() {
+    var Module = await initSqlcipher();
+    var db = new DB(Module);
+    assertEqual(db.createFunction("double_it", function(pCtx, v) { return v * 2; }), db, "returns this");
+    assertEqual(db.selectValue("SELECT double_it(21)"), 42, "scalar");
+    assertThrows(function() { db.selectValue("SELECT double_it(1, 2)"); }, /wrong number of arguments/,
+                 "arity from xFunc.length");
+
+    db.createFunction({name: "echo", xFunc: function(pCtx, v) { return v; }, deterministic: true});
+    assertEqual(JSON.stringify(db.selectArray(
+      "SELECT typeof(echo(NULL)), echo('hé'), echo(2.5), echo(-7), typeof(echo(x'0102'))")),
+      '["null","hé",2.5,-7,"blob"]', "argument and result types");
+    assertBytes(db.selectValue("SELECT echo(?)", [ALL_BYTES]), ALL_BYTES, "blob through a function");
+
+    db.createFunction("boom", function() { throw new Error("kaboom"); }, {arity: 0});
+    assertThrows(function() { db.selectValue("SELECT boom()"); }, /kaboom/, "callback error");
+
+    var sums = {};
+    db.createFunction("sumsq", {
+      xStep: function(pCtx, v) { sums[pCtx] = (sums[pCtx] || 0) + v * v; },
+      xFinal: function(pCtx) { var r = sums[pCtx] || 0; delete sums[pCtx]; return r; }
+    });
+    db.exec("CREATE TABLE t (g, v); INSERT INTO t VALUES (1, 1), (1, 2), (2, 3)");
+    assertEqual(JSON.stringify(db.selectArrays("SELECT g, sumsq(v) FROM t GROUP BY g ORDER BY g")),
+                "[[1,5],[2,9]]", "aggregate");
+
+    var win = {};
+    db.createFunction({
+      name: "wsum",
+      xStep: function(pCtx, v) { win[pCtx] = (win[pCtx] || 0) + v; },
+      xInverse: function(pCtx, v) { win[pCtx] -= v; },
+      xValue: function(pCtx) { return win[pCtx] || 0; },
+      xFinal: function(pCtx) { var r = win[pCtx] || 0; delete win[pCtx]; return r; }
+    });
+    assertEqual(JSON.stringify(db.selectValues(
+      "SELECT wsum(v) OVER (ORDER BY v ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")),
+      "[1,3,5]", "window");
+
+    assertThrows(function() { db.createFunction("bad", {xStep: function() {}}); }, /xStep and xFinal/, "no xFinal");
+    db.close();
+  });
+
   // ── Report ─────────────────────────────────────────────────
 
   resultEl.dataset.status = failed === 0 ? "pass" : "fail";
