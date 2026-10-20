@@ -81,8 +81,8 @@ site's data, or `shred()` the database.
 cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    wasm/dist/sqlcipher-worker.js wasm/dist/sqlcipher-oo1.js \
    sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
-(cd tests/wasm && npm ci && npx playwright install chromium)   # Playwright as locked
-node tests/wasm/run-tests.mjs                # ends "Result: 2/2 backends passed -- PASS"
+(cd tests/wasm && npm ci && npx playwright install chromium firefox webkit)   # Playwright as locked
+node tests/wasm/run-tests.mjs                # ends "Result: 6/6 browser/backend runs passed -- PASS"
 ```
 
 On macOS with Tcl from conda or Homebrew, `testfixture` may not find `libtcl8.6.dylib`
@@ -93,10 +93,10 @@ here: macOS drops it before `/bin/sh` starts, so it never reaches `testfixture`.
 CI (`.github/workflows/build-test.yml`) checks that `src/` differs from upstream's tag only in the
 two patched files, runs `check.sh` on all four platforms (the TCL suite on linux-glibc-x64 only),
 checks that each `.a` is the architecture its name says (`objdump -f`, or `lipo -info` on macOS)
-before uploading it, and builds and runs the browser tests in headless Chromium, once per backend
-(`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it publishes the release (`.a` per
-platform, the WASM files, the JS helpers, `sqlcipher-wasm-static.tar.gz`). Pushes to branches do
-not run it; open a PR, or start it with
+before uploading it, and builds and runs the browser tests in headless Chromium, Firefox and
+WebKit, once per backend in each (`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it
+publishes the release (`.a` per platform, the WASM files, the JS helpers,
+`sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
 `gh workflow run build-test.yml --repo wmacevoy/sqlcipher-libressl --ref <branch>`.
 
 **The trace.** Browser test names, the smoke test's steps, and CI step names start with the
