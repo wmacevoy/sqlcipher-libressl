@@ -146,6 +146,7 @@ jobs:
           cp wasm/dist/sqlcipher.wasm tests/wasm/
           cp wasm/dist/sqlcipher-api.js tests/wasm/
           cp wasm/dist/sqlcipher-worker.js tests/wasm/
+          cp wasm/dist/sqlcipher-oo1.js tests/wasm/
           cp sqlcipher-resources/sqlcipher-4.0-testkey.db tests/wasm/
 
       - name: Install Playwright
