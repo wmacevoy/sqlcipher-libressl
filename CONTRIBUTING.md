@@ -32,7 +32,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 | `wasm/sqlcipher-oo1.js` | oo1 shim (main thread, IndexedDB blob) |
 | `build-sqlcipher-libressl.sh` | WASM build: amalgamation, `emcc`, JS helpers |
 | `examples/basic.c` | native smoke test |
-| `tests/wasm/` | browser tests (`test.html`) and their Playwright runner |
+| `tests/wasm/` | browser tests (`test.html`), their Playwright runner, and test-only worker wrappers (`backend-worker.js` forces the backend) |
 
 ## Build
 
@@ -87,16 +87,16 @@ cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
    wasm/dist/sqlcipher-worker.js wasm/dist/sqlcipher-oo1.js \
    sqlcipher-resources/sqlcipher-4.0-testkey.db docs/oo1-api.md tests/wasm/
 (cd tests/wasm && npm init -y >/dev/null && npm install playwright && npx playwright install chromium)
-node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 failed -- PASS"
+node tests/wasm/run-tests.mjs                # ends "Result: 2/2 backends passed -- PASS"
 ```
 
 On macOS with Tcl from conda or Homebrew, `testfixture` may need
 `DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
 
 CI (`.github/workflows/build-test.yml`) builds and smoke-tests on all four platforms, runs
-upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium. On
-a `v*` tag it publishes the release (`.a` per platform, the WASM files, the JS helpers,
-`sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
+upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium,
+once per backend (`?backend=opfs`, `?backend=indexeddb`). On a `v*` tag it publishes the release
+(`.a` per platform, the WASM files, the JS helpers, `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
 `gh workflow run build-test.yml --repo wmacevoy/sqlcipher-libressl --ref <branch>`.
 
 **The trace.** Browser test names, the smoke test's steps, and CI step names start with the
