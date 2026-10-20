@@ -13,7 +13,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 | Document | Answers |
 | -------- | ------- |
-| [docs/REQUIREMENTS_v6.md](docs/REQUIREMENTS_v6.md) | what must observably be true, and what is not being built |
+| [docs/REQUIREMENTS_v7.md](docs/REQUIREMENTS_v7.md) | what must observably be true, and what is not being built |
 | [docs/DESIGN_v1.md](docs/DESIGN_v1.md) | how the fork meets them, what was rejected, and the known hazards |
 | [docs/QUEUE.md](docs/QUEUE.md) | what is being worked, in what order, and what would make it done |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | what was learned the expensive way |
@@ -123,11 +123,23 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 
 | Instrument | Fires on | Seen |
 | ---------- | -------- | ---- |
-| upstream's `sqlcipher.test` in CI | any change that breaks SQLCipher's behavior, including file compatibility | 12 errors, exit 1, with the release flags (locally, 2026-10-19) |
-| `shell: bash` (pipefail) on the suite step | the suite failing behind `| tail` | `bash -e` vs `bash -eo pipefail` on a failing pipe, 2026-10-19 |
+| upstream's `sqlcipher.test`, in `check.sh` | any change that breaks SQLCipher's behavior, including file compatibility | 12 errors, exit 1, with the release flags (locally, 2026-10-19); 10 errors, job failed, run 39473124410 |
+| `check.sh` | any failing native step: LibreSSL hash, build, smoke test, walseal, TCL suite (its status read from a log file, not a pipe) | wrong hash planted: exit 1; key removed from `basic.c`: exit 1 (locally, 2026-10-20); suite built without `-DSQLCIPHER_TEST`: run 39473124410 |
+| CI `upstream-diff` step (REQ1/UP-2) | any `src/` file but the two patched ones differing from `UPSTREAM_TAG` | planted edit to `src/main.c`: run 39467671875 |
+| REQ2/PLAT-1 architecture step (`objdump -f`, `lipo -info`) | a `.a` whose members are not the architecture its name says, a fat archive, a name with no known architecture | planted wrong expectation for arm64: run 39469916280 |
+| `LIBRESSL_SHA256` check (`sha256sum -c`) | a LibreSSL tarball whose bytes differ from the committed hash | planted wrong hash: every download step failed, run 39471425440 |
 | WASM "upstream compat" test | the WASM build unable to read an upstream-written file | wrong key: "file is not a database", run 39367518601 |
 | `examples/basic.c` | a database written unencrypted, readable without the key, or readable with the wrong one; one written without a key that is not plain SQLite (step 5, REQ2/ENC-2) | `sqlite3_key` removed at create: exit 1 at step 2; `sqlite3_key` planted in step 5: exit 1 (locally, 2026-10-20) |
 | WASM "no key" test | the worker encrypting a database opened without a key | worker planted to key every database: run 39465323702 |
+| `run-tests.mjs`, 6 browser/backend runs | a failure in any engine or on either backend, a browser that does not launch | planted WebKit-only assert: 4/6 runs passed, run 39469435621 |
+| `run-tests.mjs` mode check, "mode reports the backend in use" | a run on the wrong backend (the force ignored, or a wrapper that skips `backend-worker.js`) | wrapper ignoring `?backend=`: "WRONG BACKEND", run 39468092672 |
+| shred probe (`shred-probe-worker.js`) | shred deleting a file without overwriting it | shred planted to skip the overwrite: run 39466566906 |
+| REQ1/DUR-2 crash tests (`crash-worker.js`) | a commit or a cross-exec transaction a worker death leaves corrupt or half-applied, on either backend | before the WAL: OPFS and IndexedDB both failed, run 39473646953 |
+| walseal's native checks, in `check.sh` | a cleartext WAL header, a lost synced write, a break in keying from the derived key | one WAL write dropped: 4724 of 4986 replays failed; encipher skipped: leak check failed (locally, 2026-10-20) |
+| WASM WAL tests | the WAL kept in memory, its headers in the clear, the WAL deleted on a wrong-key close | runs 39477796027, 39476663107, 39476667095 |
+| rekey crash test, walseal codec rekey checks | a WAL sealed under a stale key; the follower missing | neither key opens at 18 of 28 kill points on OPFS, run 39483632951; 7 failures with the follower stubbed (locally, 2026-10-20) |
+| fail-worker ping test (`fail-worker.js`) | a failed open leaving its worker running | run 39484171208 |
+| "exported files open in the native build" step | an export missing what its WAL held | `no such table: t`, run 39487510469 |
 
 ## Pinned and floating inputs
 

@@ -192,7 +192,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium firefox webkit
 
-      - name: REQ1/WASM-1 REQ1/DUR-1 REQ1/DUR-2 REQ1/API-1 run WASM tests in Chromium, Firefox and WebKit on the OPFS and IndexedDB backends
+      - name: REQ7/WASM-1 REQ1/DUR-1 REQ1/DUR-2 REQ1/API-1 run WASM tests in Chromium, Firefox and WebKit on the OPFS and IndexedDB backends
         run: node tests/wasm/run-tests.mjs
         env:
           NATIVE_EXPORT_DIR: ${{ runner.temp }}/exported

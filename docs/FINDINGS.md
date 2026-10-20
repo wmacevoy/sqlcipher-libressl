@@ -4,6 +4,132 @@ What was learned the expensive way: surprises, dead ends, measurements. Blameles
 have found it, not who should have asked. Newest first. Entries before 2026-10-19 are reconstructed
 from commit messages.
 
+## 2026-10-20 — Changing the key under the WAL: key pragmas act at prepare
+
+- **What happened:** two things, found while keeping walseal on the key across `PRAGMA rekey`
+  (QUEUE #17). SQLCipher's key pragmas act while the statement is prepared, not when it steps, so a
+  hook after the statement is too late: rekey's own commit was still sealed under the old key, and
+  a worker killed before the next checkpoint left a database neither key opens (18 of 28 kill
+  points on OPFS, run 39483632951). And after a wrong-key `open`, SQLite's in-heap WAL index
+  records an empty WAL; a later `PRAGMA key` with the right key reads stale pages, and the next
+  commit overwrites the WAL (reproduced natively: 50 committed rows lost).
+- **Kind:** K3 — SQLCipher's `pragma.c` and `sqlite3_rekey_v2` say so; nothing here did.
+- **Cost:** none reported; caught by the rekey crash test before release.
+- **Findable by:** the rekey crash test; the native codec check.
+- **Changed:** an authorizer checkpoints before any key pragma and refuses one inside a transaction
+  or after a failed read (DESIGN *Decisions*, PR #21).
+
+## 2026-10-20 — Building the WAL on storage: what walseal turned up
+
+- **What happened:** under walseal a wrong key deciphers the WAL to noise; SQLite took it for
+  empty, and a normal close checkpointed nothing and deleted it, losing every uncheckpointed
+  commit. Once `open` does the first read itself, SQLCipher answers every later read on that
+  connection with "out of memory", so the caller's first read no longer said `file is not a
+  database` (REQ1/ENC-1). Both found writing the native codec test.
+- **Kind:** K3, found before release.
+- **Cost:** none reported.
+- **Findable by:** the native codec test's wrong-key checks.
+- **Changed:** a wrong-key `open` sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`, and the worker keys again
+  after `SQLITE_NOTADB` (PR #20).
+
+## 2026-10-20 — Shred skipped every file over 64 KB
+
+- **What happened:** `crypto.getRandomValues` throws above 65536 bytes. Shred caught the throw, so
+  a database larger than 64 KB was neither overwritten nor removed, silently (REQ1/SHR-1). Found
+  when the `-wal` shred test hit it (run 39476552244); the overwrite test (PR #10) used a 32 KB
+  file.
+- **Kind:** K3 — a caught exception hid it.
+- **Cost:** unknown; any database over 64 KB that was shredded before the fix stayed in place.
+- **Findable by:** a shred test on a file over 64 KB.
+- **Changed:** random bytes filled in 64 KB pieces (PR #20).
+
+## 2026-10-20 — The README's "Tab crash: Data safe" was false on both backends
+
+- **What happened:** killing the worker before each VFS write (QUEUE #1) gave: on OPFS, a kill
+  during a commit's main-file writes left "database disk image is malformed", and a kill after a
+  cache spill reopened with `integrity_check` ok and the uncommitted rows visible — silent. On
+  IndexedDB a single-exec transaction was always safe; one spanning execs leaked uncommitted rows
+  once a spilled page had been flushed. All three browsers, run 39473646953.
+- **Kind:** K3 — the README promised it (REQ1/DUR-2); no test had ever killed a worker.
+- **Cost:** none reported; possible silent corruption in users' browsers since v1.0.0.
+- **Findable by:** the crash tests (`crash-worker.js`).
+- **Changed:** a WAL on storage, its headers enciphered by walseal (maintainer, 2026-10-20; PR
+  #20). The crash tests are green on all six runs.
+
+## 2026-10-20 — Restarting a worker: held handles and leaked workers
+
+- **What happened:** in Chromium an OPFS access handle stays held for about 2 s after its worker is
+  terminated: reopening failed with "Access Handles cannot be created if there is another open
+  Access Handle" for about 18 tries 100 ms apart. Firefox and WebKit release it at once. And a
+  failed `init` or `open` left its worker running, with no handle returned to end it.
+- **Kind:** K2 (Chromium), K3 (the leak).
+- **Cost:** any app that restarts a crashed worker on OPFS hits the first; the second leaks a
+  worker and its handles per failed open.
+- **Findable by:** the crash tests' reopen; the fail-worker ping test (run 39484171208).
+- **Changed:** the crash test retries; a failed open terminates its worker (PR #21).
+
+## 2026-10-20 — The browser runner's timeout was never 60 s
+
+- **What happened:** `run-tests.mjs` passed `{timeout: 60000}` as `waitForFunction`'s second
+  argument, which is the function's argument, not its options, so Playwright's 30 s default
+  applied.
+- **Kind:** K3 — a limit nobody saw take effect.
+- **Findable by:** a test that runs longer than 30 s (the crash tests).
+- **Changed:** the options are the third argument, at 600 s (PR #19). A hang now costs up to 10
+  minutes per run instead of 30 s.
+
+## 2026-10-20 — Three browsers, two backends: what the first runs showed
+
+- **What happened:** CI had only ever run the browser tests in Chromium on OPFS; the IndexedDB
+  backend never ran. Forced, all 27 tests passed on it. In Playwright's WebKit an ephemeral context
+  has no OPFS (`getDirectory()` rejects with UnknownError, as in Safari private browsing), so the
+  worker fell back to IndexedDB without saying so and the forced-OPFS run reported `indexeddb`. The
+  engines are current builds (Chromium 156, Firefox 157, WebKit 27.2), so the README's minimum
+  versions are untested, as is Apple's Safari. One local run (macOS, Firefox 157, OPFS) hung after
+  REQ5/INT-1 and passed on rerun; cause not found.
+- **Kind:** K3 (coverage gap, no defect behind it), K2 (WebKit).
+- **Findable by:** asserting the reported `mode` in each run.
+- **Changed:** six runs, a fresh persistent profile each (PRs #12, #15). In Safari private windows
+  the API uses IndexedDB, the documented fallback; `db.mode` says which. REQ7/WASM-1 names what
+  is tested.
+
+## 2026-10-20 — CI inputs that moved, and checks that could not fail
+
+- **What happened:** `macos-latest` had moved to `macos-26-arm64` with no commit here (run
+  39469920483). LibreSSL was fetched with `curl -sL | tar xz`: without `-f` an HTTP error page went
+  into `tar`, and nothing checked the bytes of a good download. GitHub's default `run` shell drops a
+  failure inside `$(... | grep ... || true)`. Fail-fast cancelled the macOS job once the Linux arm64
+  job failed, so a planted failure showed on one platform.
+- **Kind:** K2.
+- **Cost:** none seen; noticed while pinning (PR #17) and enforcing the diff (PR #14). One extra CI
+  attempt.
+- **Findable by:** the "Image:" line of a job's set-up log; reading the steps.
+- **Changed:** runners named by OS release; the tarball downloaded with `-f` and checked by
+  SHA-256; the diff captured before filtering; `fail-fast: false`.
+
+## 2026-10-20 — `check.sh` on macOS, and the suite's error count
+
+- **What happened:** `DYLD_LIBRARY_PATH` never reaches `testfixture` through a `#!/bin/sh` script:
+  SIP strips `DYLD_*` when a protected binary starts, so the old hint worked only from the user's
+  own shell (dyld "Library not loaded: @rpath/libtcl8.6.dylib", exit 134). Without
+  `-DSQLCIPHER_TEST` the suite reported 10 errors on linux-glibc-x64 (run 39473124410), where the
+  2026-10-19 entry recorded 12: red, but not a stable signature. `make distclean` leaves `*.dSYM`
+  directories and `test/testdir` behind on macOS.
+- **Kind:** K2.
+- **Cost:** one local run each.
+- **Changed:** `check.sh` takes `TCL_LIBDIR` and sets `DYLD_LIBRARY_PATH` itself (PR #18). The
+  leftovers are removed by hand.
+
+## 2026-10-20 — The v1.0.0 release is older than the README said
+
+- **What happened:** v1.0.0 was built from SQLCipher 4.14.0 / SQLite 3.51.3 (`git show
+  v1.0.0:VERSION`). The README says 4.16.0 and tells readers to download v1.0.0, which has none of
+  the BLOB, 64-bit integer or oo1 work.
+- **Kind:** K3.
+- **Cost:** a reader gets an older release than the version the README states.
+- **Findable by:** `git show <tag>:VERSION`.
+- **Changed:** v2.0.0 is released from this baseline, and the downloads name it.
+
 ## 2026-10-20 — Completing the oo1 shim: what the missing methods were hiding
 
 - **What happened:** writing a test per behavior in `docs/oo1-api.md` (REQ4/OO1-2) found more than
@@ -45,8 +171,9 @@ from commit messages.
 - **Cost:** unknown; any Intel-Mac integrator gets a link failure.
 - **Findable by:** asserting each artifact's architecture (`lipo -info`, `file`) in CI; writing the
   known problem where the next person reads.
-- **Changed:** Intel macOS dropped by the maintainer (REQ2/PLAT-1); the build is gone from CI. A
-  check that each artifact's architecture matches its name is still QUEUE #3.
+- **Changed:** Intel macOS dropped by the maintainer (REQ2/PLAT-1); the build is gone from CI. CI
+  checks that each artifact is the architecture its name says (the REQ2/PLAT-1 step, seen red in
+  run 39469916280).
 
 ## 2026-10-20 — Reading the worker: the crash-safety and error claims are unproven
 
