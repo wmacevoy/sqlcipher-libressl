@@ -822,6 +822,7 @@
           await w.abort();
           break;
         } catch (e) {
+          if (e.name === "NotFoundError") break;    // never stored: nothing to wait for
           if (tries >= 100) throw new Error(names[n] + " still locked: " + e.message);
           await new Promise(function(r) { setTimeout(r, 50); });
         }
