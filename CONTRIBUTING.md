@@ -13,7 +13,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 | Document | Answers |
 | -------- | ------- |
-| [docs/REQUIREMENTS_v1.md](docs/REQUIREMENTS_v1.md) | what must observably be true, and what is not being built |
+| [docs/REQUIREMENTS_v2.md](docs/REQUIREMENTS_v2.md) | what must observably be true, and what is not being built |
 | [docs/DESIGN_v1.md](docs/DESIGN_v1.md) | how the fork meets them, what was rejected, and the known hazards |
 | [docs/QUEUE.md](docs/QUEUE.md) | what is being worked, in what order, and what would make it done |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | what was learned the expensive way |
@@ -92,7 +92,7 @@ node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 faile
 On macOS with Tcl from conda or Homebrew, `testfixture` may need
 `DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
 
-CI (`.github/workflows/build-test.yml`) builds and smoke-tests on all five platforms, runs
+CI (`.github/workflows/build-test.yml`) builds and smoke-tests on all four platforms, runs
 upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium. On
 a `v*` tag it publishes the release (`.a` per platform, the WASM files, the JS helpers,
 `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with

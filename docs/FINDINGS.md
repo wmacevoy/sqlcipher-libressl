@@ -15,7 +15,8 @@ from commit messages.
 - **Cost:** unknown; any Intel-Mac integrator gets a link failure.
 - **Findable by:** asserting each artifact's architecture (`lipo -info`, `file`) in CI; writing the
   known problem where the next person reads.
-- **Changed:** REQ1/PLAT-1 states the promise; QUEUE #3.
+- **Changed:** Intel macOS dropped by the maintainer (REQ2/PLAT-1); the build is gone from CI. A
+  check that each artifact's architecture matches its name is still QUEUE #3.
 
 ## 2026-10-20 — Reading the worker: the crash-safety and error claims are unproven
 
