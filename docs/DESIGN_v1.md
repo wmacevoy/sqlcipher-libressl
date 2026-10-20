@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v4](REQUIREMENTS_v4.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v5](REQUIREMENTS_v5.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -56,7 +56,7 @@ worker at any moment. DUR-2 depends on what is in memory when that happens; see 
 - **Release artifact names.** Downstream builds fetch them by name.
 
 Today every downstream is the maintainer's own project, in development, so these doors are cheap to
-change for now (maintainer, 2026-10-20; REQUIREMENTS_v4 *Assumptions*). They close when an outside
+change for now (maintainer, 2026-10-20; REQUIREMENTS_v5 *Assumptions*). They close when an outside
 project depends on them. Reviewed by: _nobody independent yet_.
 
 ## Decisions
@@ -92,7 +92,7 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **The TCL suite has its own configure, after the release `.a` is uploaded** (PR #1) — REQ1/UP-1
   — `-DSQLCIPHER_TEST` must not ship.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v4.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v5.md#scope-decisions).
 - **Drop the macos-x64 build** (maintainer, 2026-10-20) — REQ2/PLAT-1 — it was built on an arm64
   runner. Rejected: moving it to an Intel runner.
 - **No key means an unencrypted database** (maintainer, 2026-10-20) — REQ2/ENC-2 — compatible with
