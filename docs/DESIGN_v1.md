@@ -75,6 +75,11 @@ Reasons are from the commit messages unless marked *(inferred)*
 - **LibreSSL from its GitHub release tarball** (`609e0a2d`, `4802d60d`, `6b8acee4`) — REQ1/LIB-1 —
   the OpenBSD mirror was unreliable from CI; the git repository lacks the generated CMake files;
   `curl`, because `gh` needs a token. Rejected: the mirror; `git clone`.
+- **CI inputs name a release; the tarball and Playwright are exact** (QUEUE #7) — REQ1/LIB-1 —
+  the tarball is checked against a committed SHA-256 and Playwright comes from a committed lock;
+  runners and containers name an OS release and take its updates. Which input floats, and why, is
+  in CONTRIBUTING *Pinned and floating inputs*. Rejected: image digests and action commit SHAs,
+  which need a bot or regular hand edits to stay current.
 - **`-s FILESYSTEM=1`** (`fd2f7ef1`, in the plan file it added, since retired) — LibreSSL's
   `libcrypto.a` references BIO socket symbols at link time; about 50 KB of dead code. The oo1 shim
   also keeps its file in MEMFS through `Module.FS` *(inferred)*.
