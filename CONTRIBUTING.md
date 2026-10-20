@@ -27,12 +27,15 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 | `src/sqlcipher.c` | patched: `atexit` under Emscripten (~line 406) |
 | `wasm/sqlcipher_wasm.c` | C helpers for the JS↔WASM boundary |
 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker (`EM_JS`) |
+| `wasm/walseal.c`, `walseal.h` | VFS shim over it: enciphers the `-wal` file's headers (from `sqlcipher-embedded`, ported to LibreSSL) |
+| `wasm/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key; `#include`d after `sqlite3.c` |
 | `wasm/sqlcipher-api.js` | unified API |
 | `wasm/sqlcipher-worker.js` | Web Worker: OPFS or IndexedDB backend |
 | `wasm/sqlcipher-oo1.js` | oo1 shim (main thread, IndexedDB blob) |
 | `build-sqlcipher-libressl.sh` | WASM build: amalgamation, `emcc`, JS helpers |
 | `examples/basic.c` | native smoke test |
 | `tests/wasm/` | browser tests (`test.html`), their Playwright runner, and test-only worker wrappers (`backend-worker.js` forces the backend) |
+| `tests/walseal/` | walseal's native checks: I/O, leak, crash replay, derived key |
 
 ## Build
 
@@ -73,6 +76,11 @@ site's data, or `shred()` the database.
 gcc -O2 -o basic examples/basic.c -I. -I$HOME/libressl/include \
   libsqlite3.a $HOME/libressl/lib/libcrypto.a -lpthread -ldl -lm
 ./basic
+
+# walseal, natively (REQ1/DUR-2, REQ6/ENC-3): needs sqlite3.c from `make sqlite3.c`.
+# The crash replay takes about 13 minutes (CI runs SEEDS=7 only); `walseal.sh io|leak|crash|codec`
+# runs one part.
+LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh   # ends "walseal: all checks passed"
 
 # Upstream's suite (REQ1/UP-1, REQ1/FMT-1). Needs its own configure; never ship this build.
 make distclean
