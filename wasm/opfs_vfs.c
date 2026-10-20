@@ -6,16 +6,20 @@
  * Runs in a Web Worker. No SharedArrayBuffer needed.
  *
  * Register at startup:
- *   sqlite3_opfs_init();  // makes "opfs" the default VFS
+ *   sqlite3_opfs_init();  // "opfs", with walseal over it as the default
  *
- * Then open normally:
+ * Then open, key walseal, and use the WAL in exclusive mode (this VFS
+ * has no shared memory; exclusive mode keeps the WAL index in the heap):
  *   sqlite3_open("/mydb.db", &db);
- *   // writes go to OPFS, durable on every COMMIT
+ *   sqlite3_key(...); walseal_key_from_codec(db, "main");
+ *   PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL;
+ *   // commits go to the -wal file, durable on every COMMIT
  * ============================================================ */
 
 #include <string.h>
 #include <emscripten.h>
 #include "sqlite3.h"
+#include "walseal.h"
 
 /* ── File handle ──────────────────────────────────────────── */
 
@@ -27,14 +31,15 @@ typedef struct OpfsFile {
 /* ── EM_JS: C calls into JS OPFS handles ─────────────────── */
 
 /* xOpen: look up a pre-opened handle by filename.
-   Handles are pre-opened asynchronously in JS before sqlite3_open(). */
+   Handles (the database, and on OPFS its -wal) are pre-opened asynchronously
+   in JS before sqlite3_open(). */
 EM_JS(int, js_opfs_open, (const char *zName, int nameLen, int flags), {
     var name = UTF8ToString(zName, nameLen);
     var pre = Module._opfs_preopen;
     if (pre && pre[name] !== undefined) {
         return pre[name];
     }
-    /* Journal/WAL files: open synchronously if handle exists, or return -1 */
+    /* Other files: the worker opens them synchronously, or returns -1 */
     if (Module._opfs_open_sync) {
         return Module._opfs_open_sync(name, flags);
     }
@@ -221,6 +226,10 @@ static sqlite3_vfs opfs_vfs = {
 
 /* ── Register ─────────────────────────────────────────────── */
 
+/* walseal enciphers the WAL's headers (REQ6/ENC-3) and passes every other
+   file straight through to "opfs". */
 int sqlite3_opfs_init(void) {
-    return sqlite3_vfs_register(&opfs_vfs, 1);  /* 1 = make default */
+    int rc = sqlite3_vfs_register(&opfs_vfs, 0);
+    if (rc == SQLITE_OK) rc = walseal_register("opfs", 1);  /* 1 = make default */
+    return rc;
 }
