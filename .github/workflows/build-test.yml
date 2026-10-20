@@ -89,9 +89,10 @@ jobs:
       # and FTS5 (upstream's test recipe), which must not go into the shipped .a.
       - name: Run SQLCipher test suite
         if: matrix.artifact == 'libsqlcipher-linux-glibc-x64.a'
+        # Explicit bash runs with -eo pipefail; the container default (sh -e,
+        # dash) has no pipefail, so the status would be tail's and failures pass.
+        shell: bash
         run: |
-          # Without pipefail the step's status is tail's, so test failures pass CI.
-          set -o pipefail
           make distclean
           ./configure --with-tempstore=yes --enable-fts5 \
             CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_TEST -I$HOME/libressl/include" \
