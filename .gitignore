@@ -47,3 +47,4 @@ tests/wasm/package*.json
 tests/wasm/sqlcipher.*
 tests/wasm/sqlcipher-*.js
 tests/wasm/*.db
+tests/wasm/oo1-api.md
