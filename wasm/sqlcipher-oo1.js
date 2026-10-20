@@ -201,7 +201,7 @@ function DB(Module, opts, flagsArg, vfsArg) {
 
     var bind = opts2.bind;
     var callback = opts2.callback;
-    var rowMode = opts2.rowMode || "array";
+    var rowMode = opts2.rowMode === undefined ? "array" : opts2.rowMode;   // 0 is a column index
     var columnNames = opts2.columnNames;
     var saveSql = opts2.saveSql;
     var returnValue = opts2.returnValue || "this";
