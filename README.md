@@ -4,7 +4,7 @@
 
 Encrypted SQLite — in the browser, on the server, everywhere.
 
-Fork of [SQLCipher](https://github.com/sqlcipher/sqlcipher) v4.14.0
+Fork of [SQLCipher](https://github.com/sqlcipher/sqlcipher) v4.16.0 (SQLite 3.53.1)
 patched for **LibreSSL** and **WASM**.  Two patches, two files changed.
 
 ## Browser: encrypted SQLite that just works
@@ -54,7 +54,7 @@ Download from [Releases](https://github.com/wmacevoy/sqlcipher-libressl/releases
 ```bash
 cd examples/web
 # Download release files into this directory:
-gh release download v0.2.3 --repo wmacevoy/sqlcipher-libressl
+gh release download v1.0.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
@@ -219,7 +219,7 @@ docs/
 
 ## Upstream
 
-- **SQLCipher:** https://github.com/sqlcipher/sqlcipher (v4.14.0, SQLite 3.51.3)
+- **SQLCipher:** https://github.com/sqlcipher/sqlcipher (v4.16.0, SQLite 3.53.1)
 - **LibreSSL:** v4.2.1 — https://github.com/libressl/portable
 
 ## Why LibreSSL
