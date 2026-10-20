@@ -177,7 +177,7 @@ cd test && ../testfixture sqlcipher.test
 
 **Not tested, by decision:** stock SQLCipher opening files written here.
 The reason and when to revisit are under *Scope decisions* in
-[docs/REQUIREMENTS_v4.md](docs/REQUIREMENTS_v4.md#scope-decisions).
+[docs/REQUIREMENTS_v5.md](docs/REQUIREMENTS_v5.md#scope-decisions).
 
 ## Patches
 
