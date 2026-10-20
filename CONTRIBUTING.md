@@ -93,7 +93,8 @@ node tests/wasm/run-tests.mjs                # ends "Result: N/N passed, 0 faile
 On macOS with Tcl from conda or Homebrew, `testfixture` may need
 `DYLD_LIBRARY_PATH=<that prefix>/lib` to find `libtcl8.6.dylib`.
 
-CI (`.github/workflows/build-test.yml`) builds and smoke-tests on all four platforms, runs
+CI (`.github/workflows/build-test.yml`) checks that `src/` differs from upstream's tag only in the
+two patched files, builds and smoke-tests on all four platforms, runs
 upstream's suite on linux-glibc-x64, and builds and runs the browser tests in headless Chromium. On
 a `v*` tag it publishes the release (`.a` per platform, the WASM files, the JS helpers,
 `sqlcipher-wasm-static.tar.gz`). Pushes to branches do not run it; open a PR, or start it with
@@ -127,8 +128,9 @@ git diff <new tag> --stat -- src/   # must list only the two patched files
 ```
 
 The patches are `sqlcipher_openssl_hmac` in `crypto_openssl.c` and the `sqlcipher_fini`
-registration in `sqlcipher.c`. Update the baseline version here, in the README, and in
-REQUIREMENTS' glossary (a new version) when it moves.
+registration in `sqlcipher.c`. CI's REQ1/UP-2 step fails if any other `src/` file differs from
+the tag in `UPSTREAM_TAG` at the top of `.github/workflows/build-test.yml`. Update that tag, the
+baseline version here, in the README, and in REQUIREMENTS' glossary (a new version) when it moves.
 
 ## Rules specific to this repository
 

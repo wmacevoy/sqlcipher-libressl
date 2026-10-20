@@ -8,7 +8,34 @@ on:
     branches: [master]
   workflow_dispatch:
 
+env:
+  # The upstream SQLCipher release this fork is based on. Bump it on each
+  # upstream merge (CONTRIBUTING "Syncing with upstream").
+  UPSTREAM_TAG: v4.16.0
+
 jobs:
+  upstream-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout is shallow and has no upstream tags, so fetch just the tag.
+      # git diff compares the two trees; no shared history is needed.
+      - name: REQ1/UP-2 src/ differs from upstream only in the two patched files
+        run: |
+          git fetch --no-tags --depth=1 https://github.com/sqlcipher/sqlcipher.git \
+            "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
+          # Two steps, so a failing git diff stops the step instead of
+          # vanishing into the pipe and reading as "no other files".
+          changed=$(git diff --name-only "$UPSTREAM_TAG" HEAD -- src/)
+          others=$(echo "$changed" | grep -vxE 'src/(crypto_openssl|sqlcipher)\.c' || true)
+          if [ -n "$others" ]; then
+            echo "FAIL: REQ1/UP-2 src/ files changed from $UPSTREAM_TAG besides the two patched ones:"
+            echo "$others"
+            exit 1
+          fi
+          echo "PASS: REQ1/UP-2 src/ differs from $UPSTREAM_TAG only in crypto_openssl.c and sqlcipher.c"
+
   native:
     strategy:
       matrix:
@@ -185,7 +212,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [native, wasm]
+    needs: [upstream-diff, native, wasm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
