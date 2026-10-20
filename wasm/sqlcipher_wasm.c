@@ -15,6 +15,7 @@
 #include "sqlite3.c"
 #include <emscripten.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /* ── Database ──────────────────────────────────────────────── */
 
@@ -121,6 +122,17 @@ void wasm_stmt_bind_int(sqlite3_stmt *stmt, int i, int v) {
     sqlite3_bind_int(stmt, i, v);
 }
 
+/* 64-bit integers cross the JS boundary as a double when they fit in 53 bits, and as
+ * decimal text otherwise; the build has no BigInt support (WASM_BIGINT) to pass them whole.
+ * The JS side checks the range before calling the _text forms. */
+void wasm_stmt_bind_int64(sqlite3_stmt *stmt, int i, double v) {
+    sqlite3_bind_int64(stmt, i, (sqlite3_int64)v);
+}
+
+void wasm_stmt_bind_int64_text(sqlite3_stmt *stmt, int i, const char *dec) {
+    sqlite3_bind_int64(stmt, i, strtoll(dec, 0, 10));
+}
+
 void wasm_stmt_bind_double(sqlite3_stmt *stmt, int i, double v) {
     sqlite3_bind_double(stmt, i, v);
 }
@@ -163,6 +175,22 @@ int wasm_stmt_coltype(sqlite3_stmt *stmt, int i) {
 
 int wasm_stmt_int(sqlite3_stmt *stmt, int i) {
     return sqlite3_column_int(stmt, i);
+}
+
+/* The double is exact while |v| < 2^53; past that, read wasm_stmt_int64_text. */
+double wasm_stmt_int64(sqlite3_stmt *stmt, int i) {
+    return (double)sqlite3_column_int64(stmt, i);
+}
+
+/* The decimal text of an int64, in a buffer the next call reuses. */
+static char int64_buf[24];
+static const char *int64_text(sqlite3_int64 v) {
+    sqlite3_snprintf(sizeof int64_buf, int64_buf, "%lld", v);
+    return int64_buf;
+}
+
+const char *wasm_stmt_int64_text(sqlite3_stmt *stmt, int i) {
+    return int64_text(sqlite3_column_int64(stmt, i));
 }
 
 double wasm_stmt_double(sqlite3_stmt *stmt, int i) {
@@ -223,6 +251,8 @@ int wasm_db_create_function(sqlite3 *db, const char *name, int nArg, int flags, 
 
 int wasm_value_type(sqlite3_value **argv, int i) { return sqlite3_value_type(argv[i]); }
 double wasm_value_double(sqlite3_value **argv, int i) { return sqlite3_value_double(argv[i]); }
+double wasm_value_int64(sqlite3_value **argv, int i) { return (double)sqlite3_value_int64(argv[i]); }
+const char *wasm_value_int64_text(sqlite3_value **argv, int i) { return int64_text(sqlite3_value_int64(argv[i])); }
 const char *wasm_value_text(sqlite3_value **argv, int i) { return (const char *)sqlite3_value_text(argv[i]); }
 /* Call wasm_value_blob before wasm_value_bytes, as with columns. */
 const void *wasm_value_blob(sqlite3_value **argv, int i) { return sqlite3_value_blob(argv[i]); }
@@ -231,6 +261,8 @@ int wasm_value_bytes(sqlite3_value **argv, int i) { return sqlite3_value_bytes(a
 void wasm_result_null(sqlite3_context *ctx) { sqlite3_result_null(ctx); }
 void wasm_result_int(sqlite3_context *ctx, int v) { sqlite3_result_int(ctx, v); }
 void wasm_result_double(sqlite3_context *ctx, double v) { sqlite3_result_double(ctx, v); }
+void wasm_result_int64(sqlite3_context *ctx, double v) { sqlite3_result_int64(ctx, (sqlite3_int64)v); }
+void wasm_result_int64_text(sqlite3_context *ctx, const char *dec) { sqlite3_result_int64(ctx, strtoll(dec, 0, 10)); }
 void wasm_result_text(sqlite3_context *ctx, const char *v) { sqlite3_result_text(ctx, v, -1, SQLITE_TRANSIENT); }
 void wasm_result_blob(sqlite3_context *ctx, const void *p, int n) {
     if (n == 0) sqlite3_result_zeroblob(ctx, 0);   /* a NULL pointer would give NULL, as in wasm_stmt_bind_blob */
