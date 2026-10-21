@@ -13,7 +13,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 | Document | Answers |
 | -------- | ------- |
-| [docs/REQUIREMENTS_v9.md](docs/REQUIREMENTS_v9.md) | what must observably be true, and what is not being built |
+| [docs/REQUIREMENTS_v10.md](docs/REQUIREMENTS_v10.md) | what must observably be true, and what is not being built |
 | [docs/DESIGN_v1.md](docs/DESIGN_v1.md) | how the fork meets them, what was rejected, and the known hazards |
 | [docs/QUEUE.md](docs/QUEUE.md) | what is being worked, in what order, and what would make it done |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | what was learned the expensive way |
