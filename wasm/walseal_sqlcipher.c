@@ -1,7 +1,7 @@
 /*
 ** walseal_sqlcipher.c -- key walseal from SQLCipher's derived key
 ** (REQ6/ENC-3), and keep it on that key when a statement changes it
-** (REQ1/DUR-2).
+** (REQ8/DUR-2).
 **
 ** #include this after sqlite3.c, in the same translation unit: it reaches
 ** SQLCipher's codec through functions the amalgamation keeps static.

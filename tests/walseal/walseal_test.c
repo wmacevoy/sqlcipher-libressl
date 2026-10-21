@@ -1,6 +1,6 @@
 /*
 ** walseal_test.c -- walseal's checks, natively, against this repository's
-** amalgamation and LibreSSL (REQ1/DUR-2, REQ6/ENC-3).  Each command exits
+** amalgamation and LibreSSL (REQ8/DUR-2, REQ6/ENC-3).  Each command exits
 ** non-zero when its check fails.
 **
 ** Provenance: sqlcipher-embedded, branch experiment/wal-seal, commit

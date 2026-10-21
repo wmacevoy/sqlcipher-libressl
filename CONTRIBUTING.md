@@ -13,7 +13,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 | Document | Answers |
 | -------- | ------- |
-| [docs/REQUIREMENTS_v7.md](docs/REQUIREMENTS_v7.md) | what must observably be true, and what is not being built |
+| [docs/REQUIREMENTS_v8.md](docs/REQUIREMENTS_v8.md) | what must observably be true, and what is not being built |
 | [docs/DESIGN_v1.md](docs/DESIGN_v1.md) | how the fork meets them, what was rejected, and the known hazards |
 | [docs/QUEUE.md](docs/QUEUE.md) | what is being worked, in what order, and what would make it done |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | what was learned the expensive way |
@@ -77,7 +77,7 @@ site's data, or `shred()` the database.
 ## Test
 
 ```sh
-# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2), walseal's checks (REQ1/DUR-2, REQ6/ENC-3) and
+# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2), walseal's checks (REQ8/DUR-2, REQ6/ENC-3) and
 # upstream's suite (REQ1/UP-1, REQ1/FMT-1). walseal's crash replay runs three seeds, about 13
 # minutes; SEEDS=7 runs one, as CI does.
 ./check.sh                                   # ends "0 errors out of 208 tests" and "PASS: check.sh"
@@ -134,7 +134,7 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | `run-tests.mjs`, 6 browser/backend runs | a failure in any engine or on either backend, a browser that does not launch | planted WebKit-only assert: 4/6 runs passed, run 39469435621 |
 | `run-tests.mjs` mode check, "mode reports the backend in use" | a run on the wrong backend (the force ignored, or a wrapper that skips `backend-worker.js`) | wrapper ignoring `?backend=`: "WRONG BACKEND", run 39468092672 |
 | shred probe (`shred-probe-worker.js`) | shred deleting a file without overwriting it | shred planted to skip the overwrite: run 39466566906 |
-| REQ1/DUR-2 crash tests (`crash-worker.js`) | a commit or a cross-exec transaction a worker death leaves corrupt or half-applied, on either backend | before the WAL: OPFS and IndexedDB both failed, run 39473646953 |
+| REQ8/DUR-2 crash tests (`crash-worker.js`) | a commit or a cross-exec transaction a worker death leaves corrupt or half-applied, on either backend | before the WAL: OPFS and IndexedDB both failed, run 39473646953 |
 | walseal's native checks, in `check.sh` | a cleartext WAL header, a lost synced write, a break in keying from the derived key | one WAL write dropped: 4724 of 4986 replays failed; encipher skipped: leak check failed (locally, 2026-10-20) |
 | WASM WAL tests | the WAL kept in memory, its headers in the clear, the WAL deleted on a wrong-key close | runs 39477796027, 39476663107, 39476667095 |
 | rekey crash test, walseal codec rekey checks | a WAL sealed under a stale key; the follower missing | neither key opens at 18 of 28 kill points on OPFS, run 39483632951; 7 failures with the follower stubbed (locally, 2026-10-20) |

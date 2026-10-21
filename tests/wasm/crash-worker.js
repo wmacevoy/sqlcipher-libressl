@@ -1,4 +1,4 @@
-// crash-worker.js — the real worker, stopped at a chosen VFS write (test only, REQ1/DUR-2)
+// crash-worker.js — the real worker, stopped at a chosen VFS write (test only, REQ8/DUR-2)
 //
 // Loads the real worker through backend-worker.js (so ?backend= still selects the backend)
 // and wraps the _opfs_write callback the VFS calls for every write, main file or journal.

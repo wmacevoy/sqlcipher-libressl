@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v7](REQUIREMENTS_v7.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v8](REQUIREMENTS_v8.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -47,7 +47,7 @@ memory, and stores only flushed, committed states; the oo1 shim keeps everything
    statement (REQ1/DUR-1).
 4. One API over two backends that differ in durability (REQ1/API-1).
 5. Crash consistency through a journal on storage that must not show what SQLite writes in the
-   clear (REQ1/DUR-2, REQ6/ENC-3).
+   clear (REQ8/DUR-2, REQ6/ENC-3).
 6. Keeping the diff from upstream small enough that merging stays cheap (REQ1/UP-2).
 
 ## One-way doors
@@ -62,7 +62,7 @@ memory, and stores only flushed, committed states; the oo1 shim keeps everything
 - **Release artifact names.** Downstream builds fetch them by name.
 
 Today every downstream is the maintainer's own project, in development, so these doors are cheap to
-change for now (maintainer, 2026-10-20; REQUIREMENTS_v7 *Assumptions*). They close when an outside
+change for now (maintainer, 2026-10-20; REQUIREMENTS_v8 *Assumptions*). They close when an outside
 project depends on them. Reviewed by: _nobody independent yet_.
 
 ## Decisions
@@ -103,7 +103,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   next decision (QUEUE #16); only the rollback journal SQLite uses to switch a database to WAL is
   still in memory.
 - **A write-ahead log on storage, its headers enciphered by walseal** (maintainer, 2026-10-20) —
-  REQ1/DUR-2, REQ6/ENC-3 — the worker opens every database with `locking_mode=EXCLUSIVE` then
+  REQ8/DUR-2, REQ6/ENC-3 — the worker opens every database with `locking_mode=EXCLUSIVE` then
   `journal_mode=WAL`: one connection per worker already holds the file exclusively, and exclusive
   mode keeps the WAL index in heap memory, so the VFS needs no shared memory. walseal, a VFS shim
   from the maintainer's `sqlcipher-embedded` (branch `experiment/wal-seal`, commit `5d50c676`),
@@ -141,7 +141,7 @@ Reasons are from the commit messages unless marked *(inferred)*
     a callback and the database handle). With no key (REQ2/ENC-2) there is no codec and the WAL
     passes through: an unencrypted database's pages are in the clear anyway.
   - *A key changed in a session* (`PRAGMA rekey`, or `key`, `hexkey`, `textkey` and their
-    `re…` forms, through `exec` or `select`) — REQ1/DUR-2, REQ6/ENC-3. All frames of one WAL
+    `re…` forms, through `exec` or `select`) — REQ8/DUR-2, REQ6/ENC-3. All frames of one WAL
     must be sealed under one key, the one the next `open` derives; SQLCipher applies these
     pragmas while the statement is prepared, and rekey rewrites every page in one commit. So
     `walseal_follow_codec` (`wasm/walseal_sqlcipher.c`, run with `walseal_key_from_codec` at
@@ -182,7 +182,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   `sh` has no `pipefail`. The LibreSSL pin moved to `libressl.env` so `check.sh` and the wasm job
   read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v7.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v8.md#scope-decisions).
 - **The native build opens what the WASM build exports** (maintainer, 2026-10-20) — REQ1/EXP-1,
   REQ1/FMT-1 — under WAL the newest rows sit in the `-wal` until `export()` checkpoints, and the
   exported file is a WAL-mode file with no `-wal` beside it. `run-tests.mjs` saves each run's
@@ -221,7 +221,7 @@ Reasons are from the commit messages unless marked *(inferred)*
 
 From reading the code on 2026-10-20; none of them has been run unless it says so. Each is a QUEUE
 item with a test to write first. (The first one recorded here, "No journal survives a crash", was
-confirmed by the REQ1/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16; the second,
+confirmed by the REQ8/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16; the second,
 "Changing the key inside a session can lose the WAL's commits", is fixed and tested, see
 *Decisions*.)
 
@@ -238,8 +238,9 @@ confirmed by the REQ1/DUR-2 crash tests and is gone with the WAL on storage, QUE
 - **Non-default cipher settings and the WAL.** A database that needs them (`PRAGMA
   cipher_compatibility` and the like, given after `open`) fails the read `open` makes, so the
   worker never switches it to WAL: unless it already is one, its rollback journal stays in
-  memory, and DUR-2 does not hold for it. A key pragma on such a connection is refused (it could
-  not read its database at `open`).
+  memory, and a crash can corrupt it. REQ8/DUR-2 excludes such databases (maintainer, 2026-10-20;
+  REQUIREMENTS_v8 *Scope decisions*). A key pragma on such a connection is refused (it could not
+  read its database at `open`).
 - **The switch to WAL uses a rollback journal in memory.** The first time a database is opened,
   SQLite writes page 1 to mark it WAL, journaled in memory. Killing a worker cannot tear that one
   write; a power loss might (as below).

@@ -1,6 +1,6 @@
 /*
 ** walseal_codec_test.c -- walseal keyed from SQLCipher's derived key, opened
-** the way the WASM worker opens a database (REQ1/DUR-2, REQ6/ENC-3,
+** the way the WASM worker opens a database (REQ8/DUR-2, REQ6/ENC-3,
 ** REQ1/ENC-1, REQ2/ENC-2), natively on SQLite's unix VFS.
 **
 **   walseal_codec_test <dir>
@@ -126,7 +126,7 @@ static const char *reopen(const char *path, const char *key, int rows){
   return r;
 }
 
-/* PRAGMA rekey under WAL (REQ1/DUR-2, REQ6/ENC-3): the WAL written after it
+/* PRAGMA rekey under WAL (REQ8/DUR-2, REQ6/ENC-3): the WAL written after it
 ** must be sealed under the new key, so a crash right after the rekey, or
 ** after later commits, reopens under the new key with every committed row,
 ** and not under the old one. */
@@ -231,14 +231,14 @@ int main(int argc, char **argv){
   free(w); free(w2);
 
   /* PRAGMA key after a key that could not read: SQLite took the WAL for
-  ** empty, so a new WAL would overwrite its commits.  Refused (REQ1/DUR-2). */
+  ** empty, so a new WAL would overwrite its commits.  Refused (REQ8/DUR-2). */
   CHECK(!strcmp(worker_open(crashed, "wrong passphrase", &db), "notadb"), "wrong key again");
   CHECK(run(db, "PRAGMA key = 'passphrase'") != SQLITE_OK && strstr(sqlite3_errmsg(db), "not authorized"),
         "PRAGMA key after a failed read: refused");
   run(db, "CREATE TABLE u(x)");
   sqlite3_close(db);
 
-  /* The right key recovers every committed row from the WAL (REQ1/DUR-2). */
+  /* The right key recovers every committed row from the WAL (REQ8/DUR-2). */
   CHECK(!strcmp(worker_open(crashed, "passphrase", &db), "wal"), "reopen in WAL mode");
   CHECK(count_rows(db) == 50, "50 committed rows after the crash");
   CHECK(integrity_ok(db), "integrity_check ok");

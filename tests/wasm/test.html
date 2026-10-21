@@ -681,7 +681,7 @@
     }
   });
 
-  // ── REQ1/DUR-2: the worker killed at each write of a transaction ──
+  // ── REQ8/DUR-2: the worker killed at each write of a transaction ──
   //
   // crash-worker.js stops the worker just before VFS write N (main file or journal) and
   // tells the page, which terminates it. A first run with no kill counts the writes and
@@ -800,7 +800,7 @@
            "corrupt or at neither state: before writes " + bad.join(", "));
   }
 
-  await test("REQ1/DUR-2 worker killed at each write of a one-exec transaction: reopens at its last commit", async function() {
+  await test("REQ8/DUR-2 worker killed at each write of a one-exec transaction: reopens at its last commit", async function() {
     await crashTest("one", CRASH_SETUP, [
       "BEGIN; UPDATE t SET tag = 'after', pad = zeroblob(1200); " +
       "INSERT INTO t SELECT id + 1000, 'new', zeroblob(1000) FROM t; COMMIT"
@@ -809,7 +809,7 @@
 
   // The IndexedDB hazard in DESIGN Known hazards: a transaction open across execs, with a
   // cache small enough to spill uncommitted pages, which the flush after each exec stores.
-  await test("REQ1/DUR-2 worker killed at each write of a transaction across execs: reopens at its last commit", async function() {
+  await test("REQ8/DUR-2 worker killed at each write of a transaction across execs: reopens at its last commit", async function() {
     await crashTest("span", CRASH_SETUP.concat(["PRAGMA cache_size = 2"]), [
       "BEGIN",
       "UPDATE t SET tag = 'after', pad = zeroblob(1200) WHERE id <= 4",
@@ -819,7 +819,7 @@
     ]);
   });
 
-  // ── REQ1/DUR-2, REQ6/ENC-3: the key changed under the WAL ──
+  // ── REQ8/DUR-2, REQ6/ENC-3: the key changed under the WAL ──
   //
   // PRAGMA rekey rewrites every page under the new key in one commit. The worker is killed
   // at each write of that exec and of the next one (more rows). Until the rekey exec
@@ -829,7 +829,7 @@
 
   var REKEY_KEY = "crash-key-B";
 
-  await test("REQ1/DUR-2 worker killed at each write around PRAGMA rekey: the new key opens every committed row, the old key nothing", async function() {
+  await test("REQ8/DUR-2 worker killed at each write around PRAGMA rekey: the new key opens every committed row, the old key nothing", async function() {
     var base = "/crash-rekey-";
     var steps = ["PRAGMA rekey = '" + REKEY_KEY + "'",
                  "INSERT INTO t SELECT id + 1000, 'new', zeroblob(1000) FROM t"];
@@ -953,7 +953,7 @@
     await old.close();
   });
 
-  await test("REQ1/DUR-2 committed rows survive a worker terminated without close", async function() {
+  await test("REQ8/DUR-2 committed rows survive a worker terminated without close", async function() {
     var db = await SQLCipher.open({filename: "/t21.db", key: "k21"});
     await writeRows(db, 20);
     await crash(db);
@@ -965,7 +965,7 @@
     await db2.close();
   });
 
-  await test("REQ1/DUR-2 opening with a wrong key keeps the WAL's commits", async function() {
+  await test("REQ8/DUR-2 opening with a wrong key keeps the WAL's commits", async function() {
     var db = await SQLCipher.open({filename: "/t22.db", key: "k22"});
     await writeRows(db, 20);
     await crash(db);
