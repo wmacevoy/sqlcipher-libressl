@@ -41,6 +41,14 @@ var SQLCipher = (function() {
       if (e.data.ok) p.resolve(e.data);
       else p.reject(new Error(e.data.error));
     };
+    // A worker script that cannot be fetched, or throws while it loads, never
+    // answers: reject what waits for it, or open would never settle (REQ1/API-1).
+    worker.onerror = function(e) {
+      var pending = self._pending;
+      self._pending = {};
+      var err = new Error("the worker failed" + (e.message ? ": " + e.message : " to load"));
+      Object.keys(pending).forEach(function(id) { pending[id].reject(err); });
+    };
   }
 
   Handle.prototype._send = function(msg, transfer) {
@@ -96,7 +104,8 @@ var SQLCipher = (function() {
 
   /**
    * Import (restore) a database from an encrypted blob.
-   * Replaces current database contents; keeps same filename and key.
+   * Replaces current database contents; keeps the filename, and opens the blob
+   * under the current key (open's, or the last key pragma's).
    * @param {Uint8Array|ArrayBuffer} bytes
    * @returns {Promise<void>}
    */

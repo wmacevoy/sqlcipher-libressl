@@ -616,7 +616,8 @@ page cache.  Both are durable per statement (auto-flush on every exec).
 
 Returns a `Handle` with `mode` set to `"opfs"` or `"indexeddb"`.  If the
 worker's `init` or `open` fails, the promise rejects with its error and the
-worker is terminated.
+worker is terminated.  So does a worker script that cannot be loaded, or
+throws while it loads: the promise rejects with `the worker failed…`.
 
 #### Handle methods
 

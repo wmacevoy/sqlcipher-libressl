@@ -171,6 +171,12 @@ Reasons are from the commit messages unless marked *(inferred)*
     reopening, so no frame of the old database is replayed over the new one; *shred* overwrites
     the `-wal`'s frames with random bytes (closing without a checkpoint, so they are still there)
     and removes it, as it does the database.
+- **A worker that fails to load rejects what waits on it** (QUEUE #20) — REQ1/API-1 — a script
+  that cannot be fetched, or throws while it loads, never answers, so `open` never settled. The
+  handle's `onerror` rejects every pending request with `the worker failed…` (the browser's
+  message, when it gives one), and `open` then terminates the worker as for any failed open. No
+  method or message changed. Rejected: a timeout on `init` (a slow load on a slow device would
+  fail a good worker, and no value is right for every device).
 - **Shred overwrites with `crypto.getRandomValues` before deleting** (`3033477f`, fixed `e12e2185`)
   — REQ1/SHR-1 — defense in depth on top of encryption.
 - **The TCL suite has its own configure, after the release `.a` is kept** (PR #1) — REQ1/UP-1
