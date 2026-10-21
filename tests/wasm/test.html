@@ -642,6 +642,30 @@
     }
   });
 
+  // A worker that never answers leaves open pending forever: give it 10 s, then fail.
+  function settles(promise, label) {
+    return Promise.race([promise, new Promise(function(resolve, reject) {
+      setTimeout(function() { reject(new Error(label + ": did not settle in 10 s")); }, 10000);
+    })]);
+  }
+
+  await test("REQ1/API-1 an open whose worker fails to load rejects and ends its worker", async function() {
+    await assertRejects(settles(SQLCipher.open({filename: "/t27.db", key: "k27", workerUrl: "no-such-worker.js"}), "missing script"),
+                        /worker failed/, "missing script");
+    // A script that loads, then throws before it can answer; it answers pings first, as fail-worker.js does.
+    var src = "var c = new BroadcastChannel('worker-alive-throw');" +
+              "c.onmessage = function(e) { if (e.data && e.data.ping) c.postMessage({pong: e.data.ping}); };" +
+              "throw new Error('thrown while loading');";
+    var url = URL.createObjectURL(new Blob([src], {type: "application/javascript"}));
+    try {
+      await assertRejects(settles(SQLCipher.open({filename: "/t27.db", key: "k27", workerUrl: url}), "throwing script"),
+                          /worker failed.*thrown while loading/, "throwing script");
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    assert(!(await workerAnswers("throw")), "the worker whose script threw still runs");
+  });
+
   await test("REQ2/ENC-2 no key means an unencrypted database", async function() {
     var db = await SQLCipher.open({filename: "/t15.db"});
     await db.exec("CREATE TABLE t (x TEXT)");
