@@ -30,13 +30,14 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 | `walseal/walseal.c`, `walseal.h` | VFS shim over the VFS: enciphers the `-wal` file's headers; shared with `sqlcipher-embedded`, which compiles it with its own crypto backend |
 | `walseal/walseal_crypto.h`, `walseal_crypto_libressl.c` | walseal's crypto (AES-256 blocks, HMAC-SHA256, wipe) and its LibreSSL backend |
 | `walseal/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key, kept on it when a statement changes the key, and that key kept for `import`; `#include`d after `sqlite3.c` |
+| `walseal/walseal_recover.c` | the recovery tool (REQ10/REC-1): a database and its sealed WAL in, a plain SQLCipher database out; built by `walseal.sh recover` |
 | `wasm/sqlcipher-api.js` | unified API |
 | `wasm/sqlcipher-worker.js` | Web Worker: OPFS or IndexedDB backend |
 | `wasm/sqlcipher-oo1.js` | oo1 shim (main thread, IndexedDB blob) |
 | `build-sqlcipher-libressl.sh` | WASM build: amalgamation, `emcc`, JS helpers |
 | `examples/basic.c` | native smoke test |
 | `tests/wasm/` | browser tests (`test.html`), their Playwright runner, and test-only worker wrappers (`backend-worker.js` forces the backend) |
-| `tests/walseal/` | walseal's native checks: crypto vectors, I/O, leak, crash replay, derived key, the key kept for `import` |
+| `tests/walseal/` | walseal's native checks: crypto vectors, I/O, leak, crash replay, derived key, the key kept for `import`, the recovery tool |
 
 ## Build
 
@@ -78,12 +79,12 @@ site's data, or `shred()` the database.
 ## Test
 
 ```sh
-# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2), walseal's checks (REQ8/DUR-2, REQ6/ENC-3) and
-# upstream's suite (REQ1/UP-1, REQ1/FMT-1). walseal's crash replay runs three seeds, about 13
-# minutes; SEEDS=7 runs one, as CI does.
+# Native: smoke test (REQ1/ENC-1, REQ2/ENC-2), walseal's checks (REQ8/DUR-2, REQ6/ENC-3,
+# REQ10/REC-1) and upstream's suite (REQ1/UP-1, REQ1/FMT-1). walseal's crash replay runs three
+# seeds, about 13 minutes, and the recovery tool one more, about 2; SEEDS=7 runs one, as CI does.
 ./check.sh                                   # ends "0 errors out of 208 tests" and "PASS: check.sh"
 
-# One part of walseal's checks, after `make sqlite3.c`: crypto, io, leak, crash or codec
+# One part of walseal's checks, after `make sqlite3.c`: crypto, io, leak, crash, codec or recover
 LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh crash   # ends "walseal: all checks passed"
 
 # Browser tests: copy the build and the fixture next to the runner, then run it
@@ -138,6 +139,7 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | REQ8/DUR-2 crash tests (`crash-worker.js`) | a commit or a cross-exec transaction a worker death leaves corrupt or half-applied, on either backend | before the WAL: OPFS and IndexedDB both failed, run 39473646953 |
 | walseal's native checks, in `check.sh` | a cleartext WAL header, a lost synced write, a break in keying from the derived key | one WAL write dropped: 4724 of 4986 replays failed; encipher skipped: leak check failed (locally, 2026-10-20) |
 | walseal crypto known-answer test (`walseal.sh crypto`) | a backend whose AES-256 or HMAC-SHA256 differs from the published vectors | backend planted to copy instead of encrypt: both AES vectors FAIL, exit 1, while `leak` still passed (locally, 2026-10-20) |
+| `walseal.sh recover` | a recovery tool that loses a committed row, writes under a wrong key, touches its inputs, or leaves the output in WAL mode | tool opened without walseal, or worked in place: every cut FAIL; output renamed after a failure: wrong-key FAIL; journal mode left WAL: codec FAIL (locally, 2026-10-21). Dropping only the schema read stayed green: the checkpoint after it also refuses a wrong key |
 | WASM WAL tests | the WAL kept in memory, its headers in the clear, the WAL deleted on a wrong-key close | runs 39477796027, 39476663107, 39476667095 |
 | rekey crash test, walseal codec rekey checks | a WAL sealed under a stale key; the follower missing | neither key opens at 18 of 28 kill points on OPFS, run 39483632951; 7 failures with the follower stubbed (locally, 2026-10-20) |
 | fail-worker ping test (`fail-worker.js`) | a failed open leaving its worker running | run 39484171208 |
@@ -183,6 +185,26 @@ Tags from v2.3.0 on are `libressl-vX.Y.Z`. A bare `vX.Y.Z` collides with upstrea
 tags (`v1.x`–`v4.x`) in any clone that fetches both, and `git fetch --tags` keeps whichever came
 first, so `v2.2.0` can name upstream's 2013 commit (sqlcipher-embedded FINDINGS 2026-10-21). The
 tags up to `v2.2.0` stay as they are: releases and the puck's pins name them.
+
+## Recovering a device's database
+
+A database whose WAL walseal sealed (the WASM build's, or a sqlcipher-embedded device's) is unreadable
+to SQLite without walseal, which takes the WAL for empty and deletes it on close. Copy the database
+and its `-wal` off the device, unopened, then:
+
+```sh
+cc -O2 -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_TEMP_STORE=2 \
+  -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown \
+  -I. -Iwalseal -I"$prefix/include" -o walseal_recover walseal/walseal_recover.c \
+  walseal/walseal.c walseal/walseal_crypto_libressl.c "$prefix/lib/libcrypto.a" -lpthread -lm
+./walseal_recover -p 'cipher_page_size = 4096' device.db recovered.db < keyfile
+```
+
+The key is the first line of standard input: a passphrase, `x'<64 hex>'`, or `x'<96 hex>'` (the
+key and the salt, for a database whose page 1 may be torn). Each `-p` is a pragma run after the key,
+for settings other than SQLCipher's defaults. The output has the same key, salt and settings, and no
+WAL. Exit 0 means `integrity_check` returned `ok`; on exit 1 nothing was written. The inputs are
+only read.
 
 ## Syncing with upstream
 
