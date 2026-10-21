@@ -6,7 +6,8 @@
 #   crash  every cut, torn write and reordering since the last sync recovers
 #          to a commit boundary, stock and sealed (SEEDS, default "7 11 23",
 #          as in the source; about two minutes per seed and mode)
-#   codec  walseal keyed from SQLCipher's derived key, as the WASM worker opens
+#   codec  walseal keyed from SQLCipher's derived key, as the WASM worker opens,
+#          and the key it keeps for import (REQ1/EXP-1)
 #
 # Needs sqlite3.c (./configure ... && make sqlite3.c, see CONTRIBUTING.md).
 #   LIBRESSL=$HOME/libressl tests/walseal/walseal.sh [io|leak|crash|codec|all]

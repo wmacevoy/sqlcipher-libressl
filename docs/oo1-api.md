@@ -627,7 +627,7 @@ throws while it loads: the promise rejects with `the worker failed…`.
 | `select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects (keys = column names). BLOB columns are `Uint8Array`s; integers are `number`s while safe, `BigInt`s beyond 2^53 − 1. |
 | `flush()` | `Promise<void>` | Manual flush. Both backends auto-flush on every `exec()`. |
 | `export()` | `Promise<Uint8Array>` | Full encrypted database blob (for download / transport). |
-| `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob. Same key is reused. |
+| `import(bytes)` | `Promise<void>` | Replace database from an encrypted blob, opened under the database's current key: `open`'s, or the last key pragma's (`PRAGMA rekey`, `key`, `hexrekey`, `hexkey`). |
 | `shred()` | `Promise<void>` | Overwrite all stored blocks with random data, then delete. Handle is unusable after. |
 | `shredOnClose()` | `Promise<void>` | Set flag: `close()` will shred instead of save. Call early to ensure destruction on exit. |
 | `close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. If `shredOnClose()` was called, shreds instead. |
@@ -778,7 +778,10 @@ This is suitable for download, upload, backup, or transfer between
 devices.
 
 Use `import(bytes)` to restore from a blob.  The database is replaced
-in-place; the same encryption key is reused.
+in-place, and the blob is opened under the database's current key: the
+one given to `open`, or the one the last `PRAGMA rekey` (or `key`,
+`hexrekey`, `hexkey`) through `exec()` changed it to.  `textkey` and
+`textrekey` are not followed.
 
 ```js
 // Export

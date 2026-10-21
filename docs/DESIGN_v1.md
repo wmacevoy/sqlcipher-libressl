@@ -31,7 +31,7 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | WAL, IndexedDB backend | worker memory, never stored | none | checkpointed (`TRUNCATE`) into the database before each flush | lost if the worker dies, but the stored database already holds every flushed commit |
 | rollback journal | worker memory (`_opfs_open_sync` → `openIdb`), only while SQLite switches a database to WAL | none | — | lost if the worker dies during that one page-1 write; `xAccess` reports no journal |
 | database file, oo1 shim | MEMFS (memory) | one IndexedDB blob per store name | until `save()` | next load: the blob as last saved |
-| key | the caller | `_currentKey` in the worker (a JS string, kept for `import`); SQLCipher's derived key in the WASM heap; walseal's key (HMAC of the derived key) in the WASM heap | for the worker's lifetime | — |
+| key | the caller | `_currentKey` in the worker (`{pragma, value}`, JS strings, kept for `import`: `open`'s key, then the last key pragma's argument); that argument in the WASM heap until the connection closes or the key changes again; SQLCipher's derived key in the WASM heap; walseal's key (HMAC of the derived key) in the WASM heap | for the worker's lifetime | — |
 
 **Memory is the danger.** A browser can stop a worker at any moment. On OPFS every commit is
 synced to the `-wal` file; the IndexedDB backend keeps the WAL and the unflushed database in
@@ -167,6 +167,24 @@ Reasons are from the commit messages unless marked *(inferred)*
     fails, not the open). It then gives SQLCipher the key again, which resets its codec: after a
     failed read SQLCipher answers every later read "out of memory", so without this the caller's
     first read would not fail with `file is not a database`.
+  - *import after a key change* (QUEUE #21) — REQ1/EXP-1 — `import` closes the connection and
+    opens the new file, so it must key it with the key the database is under now, not the one
+    `open` was given. The authorizer above already sees every key pragma it lets run, with its
+    argument; it keeps a copy (`walseal_codec_key`), rekey forms as key forms: `rekey` as `key`,
+    `hexrekey` as `hexkey`. After each statement the worker reads it into `_currentKey` as
+    `{pragma, value}`, and `wasm_db_key_as` keys the next connection as that pragma would:
+    `sqlite3_key` with the passphrase, or with the hex decoded as `pragma.c` decodes it (a
+    statement would not do: the authorizer refuses key pragmas after a failed read, where the
+    worker keys again). A pragma that fails leaves the copy as it was: a refused one, an empty
+    key, a hex key that does not start with a hex byte, rekey with no codec. `textkey` and
+    `textrekey` are not kept: in SQLCipher 4.16.0 `pragma.c` gives their length as -1, so
+    `textkey` keys nothing on a keyed connection, and `textrekey` (or `textkey` before the first
+    read) crashes natively (run, 2026-10-20; see Known hazards). Rejected: parsing key pragmas out
+    of the SQL in JavaScript (the reason given above); asking the codec for the key
+    (`sqlcipherCodecGetKey`), which after the first read returns the derived key with *this*
+    file's salt, so it opens an export of this database but not a file another database wrote
+    under the same passphrase (from reading the code); and SQLCipher's `cipher_store_pass`, deprecated, which would keep
+    the passphrase in the codec for every database.
   - *export* checkpoints (`TRUNCATE`) before reading the file; *import* empties the `-wal` before
     reopening, so no frame of the old database is replayed over the new one; *shred* overwrites
     the `-wal`'s frames with random bytes (closing without a checkpoint, so they are still there)
@@ -228,8 +246,8 @@ Reasons are from the commit messages unless marked *(inferred)*
 From reading the code on 2026-10-20; none of them has been run unless it says so. Each is a QUEUE
 item with a test to write first. (The first one recorded here, "No journal survives a crash", was
 confirmed by the REQ8/DUR-2 crash tests and is gone with the WAL on storage, QUEUE #16; the second,
-"Changing the key inside a session can lose the WAL's commits", is fixed and tested, see
-*Decisions*.)
+"Changing the key inside a session can lose the WAL's commits", and the third, "After a key pragma,
+`import` reopens under the key given to `open`", are fixed and tested, see *Decisions*.)
 
 - **A worker killed inside the `exec` that changes the key** leaves the database readable under
   either key (the rekey crash test). Until that `exec` checkpoints, the database file is still
@@ -237,10 +255,15 @@ confirmed by the REQ8/DUR-2 crash tests and is gone with the WAL on storage, QUE
   connection discards the WAL holding the change and anything after it in the same `exec`. The
   `exec` never resolved, so nothing acknowledged is lost; once it resolves, only the new key
   opens the database.
-- **After a key pragma, `import` reopens under the key given to `open`** (from reading the code;
-  untested). The worker keeps that passphrase (`_currentKey`) to reopen the database after
-  `import`; a `PRAGMA rekey` through `exec` does not change it, so `import` of a file under the
-  new key opens it under the old one, and its first read fails.
+- **`PRAGMA textkey` and `textrekey` crash SQLCipher** (run natively, 2026-10-20; not yet in the
+  browser). `pragma.c` hands the codec a key length of -1: `textrekey`, and `textkey` on a
+  connection that has not read yet, end in a bus error; `textkey` on a connection that has read
+  does nothing. In the worker this would be a WASM trap in the middle of `exec`. Upstream's code
+  (REQ1/UP-2), so the worker's authorizer could refuse both instead; a question for the
+  maintainer.
+- **A rekey that fails part-way reports success** (from reading `sqlite3_rekey_v2`; untested): an
+  error while rewriting pages rolls back and still returns `SQLITE_OK`, so the worker keeps the
+  new key for `import` while the database is under the old one.
 - **Non-default cipher settings and the WAL.** A database that needs them (`PRAGMA
   cipher_compatibility` and the like, given after `open`) fails the read `open` makes, so the
   worker never switches it to WAL: unless it already is one, its rollback journal stays in

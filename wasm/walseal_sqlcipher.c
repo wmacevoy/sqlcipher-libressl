@@ -76,19 +76,51 @@ int walseal_key_from_codec(sqlite3 *db, const char *zDb){
 **      database file is under the new key too and the old key opens nothing.
 ** Sealing rekey's frames under the old key instead would leave, after a
 ** crash, a WAL the new key cannot read over a file the new key cannot read:
-** neither key would open the database. */
+** neither key would open the database.
+**
+** The authorizer also remembers the pragma's argument (walseal_codec_key),
+** so the worker can key its next connection, after import, with the key the
+** database is under now rather than the one it was opened with. */
 
 static const char *const key_pragmas[] = {
   "key", "rekey", "hexkey", "hexrekey", "textkey", "textrekey"
 };
 
-typedef struct Follow { sqlite3 *db; int iDb; int changed; } Follow;
+typedef struct Follow {
+  sqlite3 *db; int iDb; int changed;
+  const char *zPragma; char *zKey;     /* the last key pragma that changed the key */
+} Follow;
 #define FOLLOW "walseal_follow"            /* the connection's client data */
 
 /* walseal's key source: the codec's write key (the read key, except while
 ** rekey writes).  Called inside SQLite's commit, under the database mutex. */
 static int follow_key(void *pPager, unsigned char *k, int *pn){
   return codec_key((Pager*)pPager, 1, k, pn);
+}
+
+static void forget_key(Follow *f){
+  if(f->zKey){ sqlcipher_memset(f->zKey, 0, strlen(f->zKey)); sqlite3_free(f->zKey); }
+  f->zKey = 0;
+  f->zPragma = 0;
+}
+static void follow_free(void *p){
+  forget_key(p);
+  sqlite3_free(p);
+}
+
+/* Remember key_pragmas[i] = zValue as the key a new connection to the
+** database needs, rekey forms as their key forms.  Not when the pragma fails
+** and the key stays as it was: an empty key, a hex key that does not start
+** with a hex byte (pragma.c), rekey with no codec (sqlite3_rekey_v2).  Not
+** textkey or textrekey: pragma.c gives their length as -1, which SQLCipher's
+** codec cannot keep (sqlcipher_cipher_ctx_set_pass), so they key nothing. */
+static void remember_key(Follow *f, int i, const char *zValue){
+  int bHex = i == 2 || i == 3;
+  if(i >= 4 || !zValue[0]) return;
+  if(bHex && !(sqlite3Isxdigit(zValue[0]) && sqlite3Isxdigit(zValue[1]))) return;
+  if((i & 1) && !sqlcipherPagerGetCodec(sqlite3BtreePager(f->db->aDb[f->iDb].pBt))) return;
+  forget_key(f);
+  if((f->zKey = sqlite3_mprintf("%s", zValue)) != 0) f->zPragma = bHex ? "hexkey" : "key";
 }
 
 /* The authorizer, while a statement is prepared: before a key pragma on our
@@ -115,6 +147,7 @@ static int follow_auth(void *pArg, int op, const char *zName, const char *zValue
   if(sqlite3Checkpoint(f->db, f->iDb, SQLITE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt) != SQLITE_OK
      || nLog > 0) return SQLITE_DENY;
   f->changed = 1;
+  remember_key(f, i, zValue);
   return SQLITE_OK;
 }
 
@@ -130,9 +163,11 @@ int walseal_follow_codec(sqlite3 *db, const char *zDb){
   f->db = db;
   f->iDb = i;
   f->changed = 0;
+  f->zPragma = 0;
+  f->zKey = 0;
   /* freed when the connection closes; SQLite calls no authorizer after that */
-  rc = sqlite3_set_clientdata(db, FOLLOW, f, sqlite3_free);
-  if(rc != SQLITE_OK){ sqlite3_free(f); return rc; }
+  rc = sqlite3_set_clientdata(db, FOLLOW, f, follow_free);
+  if(rc != SQLITE_OK) return rc;           /* it has called follow_free(f) */
   rc = sqlite3_set_authorizer(db, follow_auth, f);
   if(rc == SQLITE_OK) rc = walseal_key_source(db, zDb, follow_key, sqlite3BtreePager(db->aDb[i].pBt));
   return rc;
@@ -149,4 +184,15 @@ int walseal_codec_settle(sqlite3 *db){
   f->changed = 0;
   return sqlite3_wal_checkpoint_v2(db, db->aDb[f->iDb].zDbSName, SQLITE_CHECKPOINT_TRUNCATE, 0, 0)
          == SQLITE_OK ? 1 : -1;
+}
+
+/* The key the database is under now, if a key pragma changed it since
+** walseal_follow_codec: its argument, and in *pzPragma the pragma that keys
+** a new connection with it, "key" or "hexkey".  NULL if none did: then it is
+** still the key the connection was opened with.  The string is the
+** connection's; it is wiped when the connection closes or the key changes. */
+const char *walseal_codec_key(sqlite3 *db, const char **pzPragma){
+  Follow *f = sqlite3_get_clientdata(db, FOLLOW);
+  *pzPragma = f ? f->zPragma : 0;
+  return f ? f->zKey : 0;
 }
