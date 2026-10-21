@@ -102,7 +102,7 @@
     await db.close();
   });
 
-  await test("REQ1/EXP-1 export returns Uint8Array", async function() {
+  await test("REQ9/EXP-1 export returns Uint8Array", async function() {
     var db = await SQLCipher.open({filename: "/t5.db", key: "k5"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('exported')");
@@ -112,7 +112,7 @@
     await db.close();
   });
 
-  await test("REQ1/EXP-1 import restores from blob", async function() {
+  await test("REQ9/EXP-1 import restores from blob", async function() {
     var db = await SQLCipher.open({filename: "/t6.db", key: "k6"});
     await db.exec("CREATE TABLE t (x TEXT)");
     await db.exec("INSERT INTO t VALUES ('original')");
@@ -139,7 +139,7 @@
     return bytes;
   }
 
-  await test("REQ1/EXP-1 import after PRAGMA rekey opens the file under the new key", async function() {
+  await test("REQ9/EXP-1 import after PRAGMA rekey opens the file under the new key", async function() {
     var bytes = await exportedUnder("/t28-src.db", "k28 new", "under the new key");
     var db = await SQLCipher.open({filename: "/t28.db", key: "k28"});
     await db.exec("CREATE TABLE t (x TEXT)");
@@ -151,7 +151,7 @@
     await db.close();
   });
 
-  await test("REQ1/EXP-1 import after PRAGMA hexrekey opens the file under the new key", async function() {
+  await test("REQ9/EXP-1 import after PRAGMA hexrekey opens the file under the new key", async function() {
     var bytes = await exportedUnder("/t29-src.db", "k29 new", "under the hex key");
     var db = await SQLCipher.open({filename: "/t29.db", key: "k29"});
     await db.exec("CREATE TABLE t (x TEXT)");
@@ -162,7 +162,7 @@
     await db.close();
   });
 
-  await test("REQ1/EXP-1 import after a refused PRAGMA rekey opens the file under the old key", async function() {
+  await test("REQ9/EXP-1 import after a refused PRAGMA rekey opens the file under the old key", async function() {
     var bytes = await exportedUnder("/t30-src.db", "k30", "under the old key");
     var db = await SQLCipher.open({filename: "/t30.db", key: "k30"});
     await db.exec("CREATE TABLE t (x TEXT)");
@@ -174,6 +174,20 @@
     var rows = await db.select("SELECT x FROM t");
     assertEqual(rows[0].x, "under the old key", "the imported row");
     await db.close();
+  });
+
+  // SQLCipher 4.16.0 passes these pragmas' length as -1, which crashed the worker.
+  await test("REQ1/ERR-1 PRAGMA textkey and textrekey are refused, and the key stays", async function() {
+    var db = await SQLCipher.open({filename: "/t31.db", key: "k31"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("INSERT INTO t VALUES ('under k31')");
+    await assertRejects(db.exec("PRAGMA textrekey = 'k31 new'"), /not authorized/, "textrekey");
+    await assertRejects(db.exec("PRAGMA textkey = 'k31 new'"), /not authorized/, "textkey");
+    await db.close();
+    var db2 = await SQLCipher.open({filename: "/t31.db", key: "k31"});
+    var rows = await db2.select("SELECT x FROM t");
+    assertEqual(rows[0].x, "under k31", "the row, under the old key");
+    await db2.close();
   });
 
   await test("REQ1/SHR-1 shred", async function() {
@@ -1084,7 +1098,7 @@
   // window.nativeExport, and CI opens each file with this repository's native build
   // (tests/wasm/open-export.c, key "export-key", 50 rows: keep the three in step).
 
-  await test("REQ1/EXP-1 export returns the whole database, for the native build to open", async function() {
+  await test("REQ9/EXP-1 export returns the whole database, for the native build to open", async function() {
     var db = await SQLCipher.open({filename: "/t26.db", key: "export-key"});
     await writeRows(db, 50);
     var bytes = await db.export();

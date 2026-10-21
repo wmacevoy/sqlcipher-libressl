@@ -272,7 +272,7 @@ var _dbPtr = 0;
 var _currentFilename = null;
 // The key the database is under now, as {pragma: "key" or "hexkey", value}, or null for no
 // key: what open was given, until a key pragma changes it (_settleKey). import keys the new
-// connection with it (REQ1/EXP-1). Secret: never log it.
+// connection with it (REQ9/EXP-1). Secret: never log it.
 var _currentKey = null;
 var _shredOnClose = false;
 
@@ -437,7 +437,7 @@ async function _checkpoint_and_flush() {
 /** After a statement that changed the key (PRAGMA rekey, or key): checkpoint,
     so the database file is under the new key too and the old key opens
     nothing (REQ8/DUR-2, REQ6/ENC-3), and keep the new key for import
-    (REQ1/EXP-1). Returns true if it checkpointed. */
+    (REQ9/EXP-1). Returns true if it checkpointed. */
 function _settleKey() {
   var r = _api.walseal_settle(_dbPtr);
   var pragma = _api.key_pragma(_dbPtr);

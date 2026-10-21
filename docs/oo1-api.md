@@ -665,7 +665,8 @@ numbers, commit sizes, salts), keyed from SQLCipher's derived key.
 checkpoints before and after it, and the WAL that follows is sealed
 under the new key.  A key pragma inside a transaction, or after an
 `open` whose key could not read the database, is refused with
-`not authorized`.
+`not authorized`; so are `PRAGMA textkey` and `textrekey`, which crash
+SQLCipher 4.16.0 (use `key` and `rekey`).
 
 **IndexedDB page cache** — The entire file is loaded into memory on
 open.  VFS reads/writes operate on the buffer; the WAL stays in
@@ -780,8 +781,7 @@ devices.
 Use `import(bytes)` to restore from a blob.  The database is replaced
 in-place, and the blob is opened under the database's current key: the
 one given to `open`, or the one the last `PRAGMA rekey` (or `key`,
-`hexrekey`, `hexkey`) through `exec()` changed it to.  `textkey` and
-`textrekey` are not followed.
+`hexrekey`, `hexkey`) through `exec()` changed it to.
 
 ```js
 // Export

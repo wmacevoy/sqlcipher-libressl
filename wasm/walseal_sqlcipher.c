@@ -111,12 +111,11 @@ static void follow_free(void *p){
 /* Remember key_pragmas[i] = zValue as the key a new connection to the
 ** database needs, rekey forms as their key forms.  Not when the pragma fails
 ** and the key stays as it was: an empty key, a hex key that does not start
-** with a hex byte (pragma.c), rekey with no codec (sqlite3_rekey_v2).  Not
-** textkey or textrekey: pragma.c gives their length as -1, which SQLCipher's
-** codec cannot keep (sqlcipher_cipher_ctx_set_pass), so they key nothing. */
+** with a hex byte (pragma.c), rekey with no codec (sqlite3_rekey_v2).
+** textkey and textrekey never get here: the authorizer refuses them. */
 static void remember_key(Follow *f, int i, const char *zValue){
   int bHex = i == 2 || i == 3;
-  if(i >= 4 || !zValue[0]) return;
+  if(!zValue[0]) return;
   if(bHex && !(sqlite3Isxdigit(zValue[0]) && sqlite3Isxdigit(zValue[1]))) return;
   if((i & 1) && !sqlcipherPagerGetCodec(sqlite3BtreePager(f->db->aDb[f->iDb].pBt))) return;
   forget_key(f);
@@ -131,7 +130,10 @@ static void remember_key(Follow *f, int i, const char *zValue){
 **   - when the connection could not read its database (the worker set
 **     SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE): SQLite then took the WAL for empty,
 **     and checkpointing or starting a new WAL would erase its commits.
-**     Close, and open again with the right key. */
+**     Close, and open again with the right key.
+** textkey and textrekey are refused on any database: SQLCipher 4.16.0's
+** pragma.c gives their length as -1, which crashes rekey and the first key
+** (REQ1/ERR-1).  key/rekey take the same text. */
 static int follow_auth(void *pArg, int op, const char *zName, const char *zValue,
                        const char *zSchema, const char *zTrigger){
   Follow *f = pArg;
@@ -140,6 +142,7 @@ static int follow_auth(void *pArg, int op, const char *zName, const char *zValue
   (void)zTrigger;
   if(op != SQLITE_PRAGMA || !zValue) return SQLITE_OK;
   for(i = 0; i < n && sqlite3_stricmp(zName, key_pragmas[i]); i++){}
+  if(i >= 4 && i < n) return SQLITE_DENY;
   if(i == n || sqlcipher_find_db_index(f->db, zSchema) != f->iDb) return SQLITE_OK;
   if(f->db->flags & SQLITE_NoCkptOnClose) return SQLITE_DENY;
   /* sqlite3Checkpoint, not sqlite3_wal_checkpoint_v2: we are inside

@@ -1,6 +1,6 @@
 /*
 ** open-export.c -- open a file the WASM build's export() returned, with this
-** repository's native build (REQ1/EXP-1, REQ1/FMT-1).
+** repository's native build (REQ9/EXP-1, REQ1/FMT-1).
 **
 **   open-export <file> <key> <rows>
 **
@@ -65,6 +65,6 @@ int main(int argc, char **argv){
   EXPECT("SELECT count(*) FROM t", want);
   EXPECT("SELECT count(*) FROM t WHERE x = 'row ' || id", want);
   sqlite3_close(db);
-  if(!fails) printf("PASS: REQ1/EXP-1 REQ1/FMT-1 %s opens natively: integrity ok, wal, %s rows\n", file, argv[3]);
+  if(!fails) printf("PASS: REQ9/EXP-1 REQ1/FMT-1 %s opens natively: integrity ok, wal, %s rows\n", file, argv[3]);
   return fails ? 1 : 0;
 }

@@ -1,7 +1,7 @@
 /*
 ** walseal_codec_test.c -- walseal keyed from SQLCipher's derived key, opened
 ** the way the WASM worker opens a database (REQ8/DUR-2, REQ6/ENC-3,
-** REQ1/ENC-1, REQ2/ENC-2), and the key it keeps for import (REQ1/EXP-1),
+** REQ1/ENC-1, REQ2/ENC-2), and the key it keeps for import (REQ9/EXP-1),
 ** natively on SQLite's unix VFS.
 **
 **   walseal_codec_test <dir>
@@ -176,10 +176,11 @@ static void rekey_test(const char *dir){
 }
 
 /* The key a key pragma leaves the database under, which the worker keys its
-** next connection with after import (REQ1/EXP-1): none until a pragma
+** next connection with after import (REQ9/EXP-1): none until a pragma
 ** changes it, then that pragma's argument, rekey forms as key forms; a
-** refused or failing pragma leaves it.  textkey and textrekey are not tried:
-** in SQLCipher 4.16.0 they key nothing or crash (walseal_sqlcipher.c). */
+** refused or failing pragma leaves it.  textkey and textrekey are refused
+** (REQ1/ERR-1): in SQLCipher 4.16.0 they key nothing or crash
+** (walseal_sqlcipher.c). */
 static void key_record_test(const char *dir){
   char path[512], pw[600];
   sqlite3 *db;
@@ -193,6 +194,11 @@ static void key_record_test(const char *dir){
   CHECK(ok, "record: open under A");
   key = walseal_codec_key(db, &pragma);
   CHECK(!key && !pragma, "record: none after open");
+  CHECK(run(db, "PRAGMA textrekey = 'key T'") != SQLITE_OK && strstr(sqlite3_errmsg(db), "not authorized"),
+        "record: textrekey refused");
+  CHECK(run(db, "PRAGMA textkey = 'key T'") != SQLITE_OK && strstr(sqlite3_errmsg(db), "not authorized"),
+        "record: textkey refused");
+  CHECK(!walseal_codec_key(db, &pragma), "record: a refused textrekey leaves none");
   ok = run(db, "BEGIN; INSERT INTO t VALUES ('in the transaction')") == SQLITE_OK
        && run(db, "PRAGMA rekey = 'key B'") != SQLITE_OK && run(db, "ROLLBACK") == SQLITE_OK;
   key = walseal_codec_key(db, &pragma);
@@ -212,6 +218,8 @@ static void key_record_test(const char *dir){
   ok = !strcmp(worker_open(path, 0, &db), "wal") && run(db, "CREATE TABLE t(x TEXT)") == SQLITE_OK;
   CHECK(ok && run(db, "PRAGMA rekey = 'key D'") != SQLITE_OK && !walseal_codec_key(db, &pragma),
         "record: rekey without a key fails and leaves none");
+  CHECK(run(db, "PRAGMA textkey = 'key T'") != SQLITE_OK && strstr(sqlite3_errmsg(db), "not authorized"),
+        "record: textkey refused without a key too");
   sqlite3_close(db);
   CHECK(!strcmp(reopen(path, 0, 0), "ok"), "record: still unencrypted");
 }
