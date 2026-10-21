@@ -282,6 +282,27 @@ int wasm_db_key(sqlite3 *db, const char *key) {
 #endif
 }
 
+/* Key db as PRAGMA <pragma> = '<value>' would, without running that
+   statement (the worker's authorizer refuses key pragmas after a failed
+   read): "key" takes the passphrase as given, "hexkey" its bytes in hex,
+   decoded as pragma.c decodes them (at most 40 bytes, up to the first
+   non-hex digit).  The worker keeps its current key in this form
+   (wasm_db_key_pragma).  Returns an SQLite result code. */
+int wasm_db_key_as(sqlite3 *db, const char *pragma, const char *value) {
+    char buf[40];
+    unsigned char b = 0;
+    int i, rc;
+    if (!strcmp(pragma, "key")) return wasm_db_key(db, value);
+    if (strcmp(pragma, "hexkey")) return SQLITE_MISUSE;
+    for (i = 0; i < (int)sizeof(buf) * 2 && sqlite3Isxdigit(value[i]); i++) {
+        b = (unsigned char)((b << 4) + sqlite3HexToInt(value[i]));
+        if (i & 1) buf[i / 2] = (char)b;
+    }
+    rc = i / 2 ? sqlite3_key(db, buf, i / 2) : SQLITE_MISUSE;
+    sqlcipher_memset(buf, 0, sizeof(buf));
+    return rc;
+}
+
 /* ── The WAL (the worker) ──────────────────────────────────── */
 
 /* walseal's key from SQLCipher's derived key, kept on that key when a
@@ -296,6 +317,19 @@ int wasm_db_walseal_key(sqlite3 *db) {
    checkpointed, 0 if not, -1 on error (walseal_codec_settle). */
 int wasm_db_walseal_settle(sqlite3 *db) {
     return walseal_codec_settle(db);
+}
+
+/* After wasm_db_walseal_settle: the pragma ("key" or "hexkey") and argument
+   of the last key pragma that changed the key since the connection opened,
+   for wasm_db_key_as; NULL (to JS, "") if none did (walseal_codec_key). */
+const char *wasm_db_key_pragma(sqlite3 *db) {
+    const char *pragma;
+    walseal_codec_key(db, &pragma);
+    return pragma;
+}
+const char *wasm_db_key_value(sqlite3 *db) {
+    const char *pragma;
+    return walseal_codec_key(db, &pragma);
 }
 
 /* Close without checkpointing or deleting the WAL.  Under a key that cannot

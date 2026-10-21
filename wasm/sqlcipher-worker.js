@@ -270,6 +270,9 @@ var Module;
 var _api;
 var _dbPtr = 0;
 var _currentFilename = null;
+// The key the database is under now, as {pragma: "key" or "hexkey", value}, or null for no
+// key: what open was given, until a key pragma changes it (_settleKey). import keys the new
+// connection with it (REQ1/EXP-1). Secret: never log it.
 var _currentKey = null;
 var _shredOnClose = false;
 
@@ -311,7 +314,9 @@ async function init() {
     walseal_settle: Module.cwrap("wasm_db_walseal_settle", "number", ["number"]),
     keep_wal:   Module.cwrap("wasm_db_keep_wal",        "number",  ["number"]),
     changes:    Module.cwrap("wasm_db_changes",         "number",  ["number"]),
-    key:        Module.cwrap("wasm_db_key",             "number",  ["number", "string"]),
+    key_as:     Module.cwrap("wasm_db_key_as",          "number",  ["number", "string", "string"]),
+    key_pragma: Module.cwrap("wasm_db_key_pragma",      "string",  ["number"]),
+    key_value:  Module.cwrap("wasm_db_key_value",       "string",  ["number"]),
     prepare:    Module.cwrap("wasm_db_prepare",         "number",  ["number", "string"]),
     finalize:   Module.cwrap("wasm_stmt_finalize",      null,      ["number"]),
     reset:      Module.cwrap("wasm_stmt_reset",         null,      ["number"]),
@@ -431,9 +436,12 @@ async function _checkpoint_and_flush() {
 
 /** After a statement that changed the key (PRAGMA rekey, or key): checkpoint,
     so the database file is under the new key too and the old key opens
-    nothing (REQ8/DUR-2, REQ6/ENC-3). Returns true if it did. */
+    nothing (REQ8/DUR-2, REQ6/ENC-3), and keep the new key for import
+    (REQ1/EXP-1). Returns true if it checkpointed. */
 function _settleKey() {
   var r = _api.walseal_settle(_dbPtr);
+  var pragma = _api.key_pragma(_dbPtr);
+  if (pragma) _currentKey = {pragma: pragma, value: _api.key_value(_dbPtr)};
   if (r < 0) throw new Error(_api.errmsg(_dbPtr));
   return r === 1;
 }
@@ -530,6 +538,13 @@ function _closeDb() {
   Module._opfs_preopen = {};
 }
 
+/** Key the connection with _currentKey, if any. */
+function _key() {
+  if (!_currentKey) return;
+  var rc = _api.key_as(_dbPtr, _currentKey.pragma, _currentKey.value);
+  if (rc !== 0) throw new Error("key: error " + rc);
+}
+
 /** After the key: walseal's key, then the WAL in exclusive mode (REQ8/DUR-2,
     REQ6/ENC-3). A key that cannot read the database fails its first read
     here; open still resolves (REQ1/ENC-1), and the WAL is kept on close. */
@@ -545,7 +560,7 @@ function _useWal() {
     _api.keep_wal(_dbPtr);
     // After a failed read SQLCipher answers every later read "out of memory";
     // keying again resets it, so the caller's first read fails as REQ1/ENC-1 says.
-    if (_currentKey) _api.key(_dbPtr, _currentKey);
+    _key();
     return;
   }
   if (mode !== "wal") throw new Error("journal_mode is " + mode + ", not wal");
@@ -567,7 +582,7 @@ async function handleMessage(msg) {
       case "open": {
         _closeDb();
         _currentFilename = msg.filename;
-        _currentKey = msg.key || null;
+        _currentKey = msg.key ? {pragma: "key", value: msg.key} : null;
 
         var hid;
         if (_useOpfs) {
@@ -580,7 +595,7 @@ async function handleMessage(msg) {
         try {
           await _preopenWal(msg.filename);
           _dbPtr = _api.open(msg.filename);
-          if (msg.key) _api.key(_dbPtr, msg.key);
+          _key();
           _useWal();
         } catch(e) {
           _closeDb();    // release the database's access handle too, so a retry can open it
@@ -669,7 +684,7 @@ async function handleMessage(msg) {
 
         _currentFilename = fn;
         _dbPtr = _api.open(fn);
-        if (_currentKey) _api.key(_dbPtr, _currentKey);
+        _key();
         _useWal();
         postMessage({id: id, ok: true});
         break;

@@ -68,7 +68,7 @@ python3 -m http.server 8000
 | `db.select(sql, bind?)` | `Promise<Object[]>` | Query rows as objects. |
 | `db.flush()` | `Promise<void>` | Manual flush (auto-flush happens on every exec). |
 | `db.export()` | `Promise<Uint8Array>` | Full encrypted blob for transport. |
-| `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob. |
+| `db.import(bytes)` | `Promise<void>` | Restore from encrypted blob, opened under the database's current key (`open`'s, or the last `PRAGMA rekey`'s). |
 | `db.shred()` | `Promise<void>` | Overwrite all storage with random data + delete. |
 | `db.shredOnClose()` | `Promise<void>` | Flag: `close()` will shred instead of save. |
 | `db.close()` | `Promise<void>` | Auto-saves (IndexedDB), then closes. Shreds if flagged. |

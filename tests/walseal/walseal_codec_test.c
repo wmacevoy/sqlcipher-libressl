@@ -1,7 +1,8 @@
 /*
 ** walseal_codec_test.c -- walseal keyed from SQLCipher's derived key, opened
 ** the way the WASM worker opens a database (REQ8/DUR-2, REQ6/ENC-3,
-** REQ1/ENC-1, REQ2/ENC-2), natively on SQLite's unix VFS.
+** REQ1/ENC-1, REQ2/ENC-2), and the key it keeps for import (REQ1/EXP-1),
+** natively on SQLite's unix VFS.
 **
 **   walseal_codec_test <dir>
 **
@@ -174,6 +175,47 @@ static void rekey_test(const char *dir){
   CHECK(!strcmp(reopen(crashed, "key A", 20), "notadb"), "rekey: the old key reads nothing: file is not a database");
 }
 
+/* The key a key pragma leaves the database under, which the worker keys its
+** next connection with after import (REQ1/EXP-1): none until a pragma
+** changes it, then that pragma's argument, rekey forms as key forms; a
+** refused or failing pragma leaves it.  textkey and textrekey are not tried:
+** in SQLCipher 4.16.0 they key nothing or crash (walseal_sqlcipher.c). */
+static void key_record_test(const char *dir){
+  char path[512], pw[600];
+  sqlite3 *db;
+  const char *pragma, *key;
+  int ok;
+  snprintf(path, sizeof(path), "%s/record.db", dir);
+  snprintf(pw, sizeof(pw), "%s-wal", path);
+  remove(path); remove(pw);
+
+  ok = !strcmp(worker_open(path, "key A", &db), "wal") && run(db, "CREATE TABLE t(x TEXT)") == SQLITE_OK;
+  CHECK(ok, "record: open under A");
+  key = walseal_codec_key(db, &pragma);
+  CHECK(!key && !pragma, "record: none after open");
+  ok = run(db, "BEGIN; INSERT INTO t VALUES ('in the transaction')") == SQLITE_OK
+       && run(db, "PRAGMA rekey = 'key B'") != SQLITE_OK && run(db, "ROLLBACK") == SQLITE_OK;
+  key = walseal_codec_key(db, &pragma);
+  CHECK(ok && !key && !pragma, "record: a refused rekey leaves none");
+  CHECK(run(db, "PRAGMA hexrekey = 'zz'") != SQLITE_OK && !walseal_codec_key(db, &pragma), "record: a failing hexrekey leaves none");
+  CHECK(run(db, "PRAGMA hexrekey = '6b65792042'") == SQLITE_OK, "record: hexrekey to 'key B'");
+  key = walseal_codec_key(db, &pragma);
+  CHECK(key && pragma && !strcmp(pragma, "hexkey") && !strcmp(key, "6b65792042"), "record: hexrekey kept as hexkey");
+  CHECK(run(db, "PRAGMA rekey = 'key C'") == SQLITE_OK, "record: rekey to C");
+  key = walseal_codec_key(db, &pragma);
+  CHECK(key && pragma && !strcmp(pragma, "key") && !strcmp(key, "key C"), "record: rekey kept as key");
+  sqlite3_close(db);
+  CHECK(!strcmp(reopen(path, "key C", 0), "ok"), "record: the database is under the kept key");
+
+  /* rekey of an unencrypted database fails: no key to keep */
+  remove(path); remove(pw);
+  ok = !strcmp(worker_open(path, 0, &db), "wal") && run(db, "CREATE TABLE t(x TEXT)") == SQLITE_OK;
+  CHECK(ok && run(db, "PRAGMA rekey = 'key D'") != SQLITE_OK && !walseal_codec_key(db, &pragma),
+        "record: rekey without a key fails and leaves none");
+  sqlite3_close(db);
+  CHECK(!strcmp(reopen(path, 0, 0), "ok"), "record: still unencrypted");
+}
+
 /* Commit n rows, one transaction each, then copy the database and its WAL
 ** to crashed while the connection is still open. */
 static int write_then_crash(const char *live, const char *key, int n, const char *crashed){
@@ -254,6 +296,7 @@ int main(int argc, char **argv){
   sqlite3_close(db);
 
   rekey_test(argv[1]);
+  key_record_test(argv[1]);
 
   printf("walseal codec: %s\n", fails ? "FAIL" : "ok");
   return fails != 0;

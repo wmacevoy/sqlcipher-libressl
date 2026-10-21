@@ -128,6 +128,54 @@
     await db.close();
   });
 
+  // import opens the file under the key the database is under now. A file made by another
+  // database has its own salt, so only that key, not the derived one, opens it.
+  async function exportedUnder(filename, key, value) {
+    var src = await SQLCipher.open({filename: filename, key: key});
+    await src.exec("CREATE TABLE t (x TEXT)");
+    await src.exec("INSERT INTO t VALUES (?)", [value]);
+    var bytes = await src.export();
+    await src.close();
+    return bytes;
+  }
+
+  await test("REQ1/EXP-1 import after PRAGMA rekey opens the file under the new key", async function() {
+    var bytes = await exportedUnder("/t28-src.db", "k28 new", "under the new key");
+    var db = await SQLCipher.open({filename: "/t28.db", key: "k28"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("PRAGMA rekey = 'k28 new'");
+    await db.import(bytes);
+    var rows = await db.select("SELECT x FROM t");
+    assertEqual(rows.length, 1, "rows after import");
+    assertEqual(rows[0].x, "under the new key", "the imported row");
+    await db.close();
+  });
+
+  await test("REQ1/EXP-1 import after PRAGMA hexrekey opens the file under the new key", async function() {
+    var bytes = await exportedUnder("/t29-src.db", "k29 new", "under the hex key");
+    var db = await SQLCipher.open({filename: "/t29.db", key: "k29"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("PRAGMA hexrekey = '6b3239206e6577'");     // "k29 new"
+    await db.import(bytes);
+    var rows = await db.select("SELECT x FROM t");
+    assertEqual(rows[0].x, "under the hex key", "the imported row");
+    await db.close();
+  });
+
+  await test("REQ1/EXP-1 import after a refused PRAGMA rekey opens the file under the old key", async function() {
+    var bytes = await exportedUnder("/t30-src.db", "k30", "under the old key");
+    var db = await SQLCipher.open({filename: "/t30.db", key: "k30"});
+    await db.exec("CREATE TABLE t (x TEXT)");
+    await db.exec("BEGIN");
+    await db.exec("INSERT INTO t VALUES ('in the transaction')");
+    await assertRejects(db.exec("PRAGMA rekey = 'k30 new'"), /not authorized/, "rekey inside a transaction");
+    await db.exec("ROLLBACK");
+    await db.import(bytes);
+    var rows = await db.select("SELECT x FROM t");
+    assertEqual(rows[0].x, "under the old key", "the imported row");
+    await db.close();
+  });
+
   await test("REQ1/SHR-1 shred", async function() {
     var db = await SQLCipher.open({filename: "/t7.db", key: "k7"});
     await db.exec("CREATE TABLE t (x TEXT)");
