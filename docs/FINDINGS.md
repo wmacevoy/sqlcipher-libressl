@@ -115,7 +115,10 @@ from commit messages.
   worker fell back to IndexedDB without saying so and the forced-OPFS run reported `indexeddb`. The
   engines are current builds (Chromium 156, Firefox 157, WebKit 27.2), so the README's minimum
   versions are untested, as is Apple's Safari. One local run (macOS, Firefox 157, OPFS) hung after
-  REQ5/INT-1 and passed on rerun; cause not found.
+  REQ5/INT-1 and passed on rerun; cause not found. Seen again in CI on 2026-10-21 (PR #31, run
+  39646089487, which changed no browser code): Firefox on OPFS timed out after the REQ8/DUR-2
+  worker-kill tests, the other five runs passed 43/43, and the rerun passed. Two sightings, two
+  different places; still no cause.
 - **Kind:** K3 (coverage gap, no defect behind it), K2 (WebKit).
 - **Findable by:** asserting the reported `mode` in each run.
 - **Changed:** six runs, a fresh persistent profile each (PRs #12, #15). In Safari private windows
