@@ -1,6 +1,7 @@
 #!/bin/sh
 # walseal's native checks (REQ8/DUR-2, REQ6/ENC-3), against this repository's
 # amalgamation and LibreSSL's libcrypto.a:
+#   crypto the crypto backend against published AES-256 and HMAC-SHA256 vectors
 #   io     sealed WAL I/O is identical to stock
 #   leak   a sealed WAL shows no header field in the clear
 #   crash  every cut, torn write and reordering since the last sync recovers
@@ -10,7 +11,7 @@
 #          and the key it keeps for import (REQ9/EXP-1)
 #
 # Needs sqlite3.c (./configure ... && make sqlite3.c, see CONTRIBUTING.md).
-#   LIBRESSL=$HOME/libressl tests/walseal/walseal.sh [io|leak|crash|codec|all]
+#   LIBRESSL=$HOME/libressl tests/walseal/walseal.sh [crypto|io|leak|crash|codec|all]
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -20,19 +21,25 @@ CC=${CC:-cc}
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 FLAGS="-O2 -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_OPENSSL -DSQLITE_TEMP_STORE=2
   -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown
-  -I$root -I$root/wasm -I$LIBRESSL/include"
+  -I$root -I$root/walseal -I$LIBRESSL/include"
 LIBS="$LIBRESSL/lib/libcrypto.a -lpthread -lm"
+WALSEAL="$root/walseal/walseal.c $root/walseal/walseal_crypto_libressl.c"
 what=${1:-all}
 
+case $what in crypto|all)
+  # shellcheck disable=SC2086
+  $CC $FLAGS -o "$out/walseal_crypto_test" "$here/walseal_crypto_test.c" "$root/walseal/walseal_crypto_libressl.c" "$root/sqlite3.c" $LIBS ;;
+esac
 case $what in io|leak|crash|all)
   # shellcheck disable=SC2086
-  $CC $FLAGS -o "$out/walseal_test" "$here/walseal_test.c" "$root/wasm/walseal.c" "$root/sqlite3.c" $LIBS ;;
+  $CC $FLAGS -o "$out/walseal_test" "$here/walseal_test.c" $WALSEAL "$root/sqlite3.c" $LIBS ;;
 esac
 case $what in codec|all)
   # shellcheck disable=SC2086
-  $CC $FLAGS -o "$out/walseal_codec_test" "$here/walseal_codec_test.c" "$root/wasm/walseal.c" $LIBS ;;
+  $CC $FLAGS -o "$out/walseal_codec_test" "$here/walseal_codec_test.c" $WALSEAL $LIBS ;;
 esac
 
+case $what in crypto|all) "$out/walseal_crypto_test" ;; esac
 case $what in io|all) "$out/walseal_test" io "$out" 1000 16 20 ;; esac
 case $what in leak|all) "$out/walseal_test" leak "$out" ;; esac
 # The salt goes in the key: a torn page 1 is not walseal's to survive (DESIGN, Known hazards).

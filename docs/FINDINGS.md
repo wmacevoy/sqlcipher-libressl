@@ -4,6 +4,18 @@ What was learned the expensive way: surprises, dead ends, measurements. Blameles
 have found it, not who should have asked. Newest first. Entries before 2026-10-19 are reconstructed
 from commit messages.
 
+## 2026-10-20 — walseal's checks could not see a wrong block cipher
+
+- **What happened:** moving walseal's crypto behind a seam (QUEUE #25), a backend planted to copy
+  its input instead of encrypting it passed the `leak` check. The Feistel network XORs in its
+  tweaks, so even an identity "AES" leaves no header field in the clear, while anyone could undo
+  it without the key. No check compared walseal's output with an independent computation.
+- **Fix:** `walseal.sh crypto`, a known-answer test of the backend against FIPS-197 C.3 and
+  RFC 4231 case 1 (vectors confirmed with the `openssl` command, 2026-10-20). Every backend,
+  including sqlcipher-embedded's PSA one, must pass it.
+- **What would have found it sooner:** planting a broken primitive, not only a skipped step, when
+  the leak check was first seen red.
+
 ## 2026-10-20 — Following the key for import: what SQLCipher's key pragmas do
 
 - **What happened:** writing the record of the current key (QUEUE #21) found three things. In
