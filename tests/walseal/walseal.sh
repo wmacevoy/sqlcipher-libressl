@@ -9,9 +9,12 @@
 #          as in the source; about two minutes per seed and mode)
 #   codec  walseal keyed from SQLCipher's derived key, as the WASM worker opens,
 #          and the key it keeps for import (REQ9/EXP-1)
+#   recover the recovery tool (REQ10/REC-1) on every sealed cut of the crash
+#          replay (the first of SEEDS) and on the codec check's passphrase and
+#          rekey crashes; under a wrong key it must refuse
 #
 # Needs sqlite3.c (./configure ... && make sqlite3.c, see CONTRIBUTING.md).
-#   LIBRESSL=$HOME/libressl tests/walseal/walseal.sh [crypto|io|leak|crash|codec|all]
+#   LIBRESSL=$HOME/libressl tests/walseal/walseal.sh [crypto|io|leak|crash|codec|recover|all]
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -30,13 +33,18 @@ case $what in crypto|all)
   # shellcheck disable=SC2086
   $CC $FLAGS -o "$out/walseal_crypto_test" "$here/walseal_crypto_test.c" "$root/walseal/walseal_crypto_libressl.c" "$root/sqlite3.c" $LIBS ;;
 esac
-case $what in io|leak|crash|all)
+case $what in io|leak|crash|recover|all)
   # shellcheck disable=SC2086
   $CC $FLAGS -o "$out/walseal_test" "$here/walseal_test.c" $WALSEAL "$root/sqlite3.c" $LIBS ;;
 esac
-case $what in codec|all)
+case $what in codec|recover|all)
   # shellcheck disable=SC2086
   $CC $FLAGS -o "$out/walseal_codec_test" "$here/walseal_codec_test.c" $WALSEAL $LIBS ;;
+esac
+
+case $what in recover|all)
+  # shellcheck disable=SC2086
+  $CC $FLAGS -o "$out/walseal_recover" "$root/walseal/walseal_recover.c" $WALSEAL $LIBS ;;
 esac
 
 case $what in crypto|all) "$out/walseal_crypto_test" ;; esac
@@ -49,4 +57,9 @@ case $what in crash|all)
   done ;;
 esac
 case $what in codec|all) "$out/walseal_codec_test" "$out" ;; esac
+case $what in recover|all)
+  set -- ${SEEDS:-7 11 23}
+  SALT_IN_KEY=1 RECOVER="$out/walseal_recover" "$out/walseal_test" crash "$out" sealed "$1"
+  RECOVER="$out/walseal_recover" "$out/walseal_codec_test" "$out" ;;
+esac
 echo "walseal: all checks passed"

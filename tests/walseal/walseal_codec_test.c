@@ -6,6 +6,9 @@
 **
 **   walseal_codec_test <dir>
 **
+** With RECOVER naming the recovery tool, it also recovers a crashed database
+** under a passphrase, and one after a rekey (REQ10/REC-1).
+**
 ** One translation unit with the amalgamation, as sqlcipher_wasm.c is, because
 ** walseal_key_from_codec reaches SQLCipher's static codec functions.  A
 ** "crash" is a copy of the database and its WAL taken while the connection is
@@ -15,6 +18,7 @@
 #include "walseal_sqlcipher.c"
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 
 static int fails;
 #define CHECK(c, msg) do{ if(!(c)){ fprintf(stderr, "FAIL: %s\n", msg); fails++; } }while(0)
@@ -101,6 +105,53 @@ static int clear_fields(const unsigned char *w, long nw){
   return clear;
 }
 
+/* The recovery tool's exit status on crashed into out, key on its stdin. */
+static int tool_exit(const char *tool, const char *crashed, const char *out, const char *key){
+  char cmd[1600];
+  FILE *p;
+  int st;
+  snprintf(cmd, sizeof(cmd), "'%s' '%s' '%s' 2>/dev/null", tool, crashed, out);
+  if(!(p = popen(cmd, "w"))) return -1;
+  fprintf(p, "%s\n", key);
+  st = pclose(p);
+  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+/* REQ10/REC-1, when RECOVER names the tool: a wrong key exits 1 and writes
+** nothing; key writes a database that opens without walseal, not in WAL mode,
+** with rows rows and integrity_check ok; the inputs are untouched. */
+static void recover_check(const char *crashed, const char *key, int rows, const char *dir){
+  const char *tool = getenv("RECOVER");
+  char out[512], ow[600], cw[600], mode[16] = "";
+  unsigned char *d0, *w0, *d1, *w1;
+  long nd0, nw0, nd1, nw1;
+  sqlite3 *db;
+  sqlite3_stmt *s;
+  if(!tool) return;
+  snprintf(out, sizeof(out), "%s/recovered.db", dir);
+  snprintf(ow, sizeof(ow), "%s-wal", out);
+  snprintf(cw, sizeof(cw), "%s-wal", crashed);
+  remove(out);
+  d0 = slurp(crashed, &nd0); w0 = slurp(cw, &nw0);
+  CHECK(tool_exit(tool, crashed, out, "wrong passphrase") == 1 && access(out, F_OK) != 0,
+        "REQ10/REC-1 recovery tool, wrong key: exit 1, no output");
+  CHECK(tool_exit(tool, crashed, out, key) == 0, "REQ10/REC-1 recovery tool: exit 0");
+  d1 = slurp(crashed, &nd1); w1 = slurp(cw, &nw1);
+  CHECK(nd1 == nd0 && nw1 == nw0 && !memcmp(d0, d1, nd0) && !memcmp(w0, w1, nw0),
+        "REQ10/REC-1 recovery tool: inputs byte-identical afterwards");
+  CHECK(access(ow, F_OK) != 0, "REQ10/REC-1 recovery tool: no WAL beside the output");
+  CHECK(sqlite3_open_v2(out, &db, SQLITE_OPEN_READWRITE, "unix") == SQLITE_OK
+        && sqlite3_key(db, key, (int)strlen(key)) == SQLITE_OK, "REQ10/REC-1 output opens without walseal");
+  if(sqlite3_prepare_v2(db, "PRAGMA journal_mode", -1, &s, 0) == SQLITE_OK && sqlite3_step(s) == SQLITE_ROW)
+    snprintf(mode, sizeof(mode), "%s", (const char*)sqlite3_column_text(s, 0));
+  sqlite3_finalize(s);
+  CHECK(!strcmp(mode, "delete"), "REQ10/REC-1 output is not in WAL mode");
+  CHECK(count_rows(db) == rows && integrity_ok(db), "REQ10/REC-1 output holds every committed row, integrity_check ok");
+  sqlite3_close(db);
+  remove(out);
+  free(d0); free(w0); free(d1); free(w1);
+}
+
 /* One exec, as the worker runs it: the SQL, then settle a key change. */
 static int run(sqlite3 *db, const char *sql){
   int rc = sqlite3_exec(db, sql, 0, 0, 0);
@@ -171,6 +222,7 @@ static void rekey_test(const char *dir){
   w = slurp(cw, &nw);
   CHECK(nw >= 32 + 24 + 4096 && clear_fields(w, nw) == 0, "rekey: the WAL after it holds frames, no header field in the clear");
   free(w);
+  recover_check(crashed, "key B", 20, dir);
   CHECK(!strcmp(reopen(crashed, "key B", 20), "ok"), "rekey: crash after more commits, reopen under B: 20 rows, integrity ok");
   CHECK(!strcmp(reopen(crashed, "key A", 20), "notadb"), "rekey: the old key reads nothing: file is not a database");
 }
@@ -287,6 +339,8 @@ int main(int argc, char **argv){
         "PRAGMA key after a failed read: refused");
   run(db, "CREATE TABLE u(x)");
   sqlite3_close(db);
+
+  recover_check(crashed, "passphrase", 50, argv[1]);
 
   /* The right key recovers every committed row from the WAL (REQ8/DUR-2). */
   CHECK(!strcmp(worker_open(crashed, "passphrase", &db), "wal"), "reopen in WAL mode");

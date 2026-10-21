@@ -248,6 +248,16 @@ Reasons are from the commit messages unless marked *(inferred)*
   does. Rejected: the reference's old description (UTF-8 bytes as a raw key), under which a
   database written by one API would not open in the other. Raw keys are the `hexkey` option, or a
   byte-array `key`.
+- **The recovery tool works on copies, keyed from the codec** (QUEUE #26) — REQ10/REC-1 — SQLite
+  without walseal, or under a wrong key, takes a sealed WAL for empty and deletes it on close, so
+  the tool never opens its inputs: it copies the database and WAL into a directory beside the
+  output, recovers there, and renames only after `integrity_check` = `ok`. It keys walseal with
+  `walseal_key_from_codec`, as the worker and sqlcipher-embedded do, so one key opens both. The key
+  comes on standard input, not as an argument, which any process listing shows. It refuses an empty
+  database file: with no page 1 to fail on, a wrong key would read the WAL as empty and write an
+  empty database *(inferred; untested, and SQLite writes page 1 before a WAL exists, so likely
+  unreachable)*. Rejected: recovering in place (destroys the evidence when it goes wrong), and a
+  separate walseal key argument (a second secret to lose, and one the device never stored).
 
 ## Known hazards
 

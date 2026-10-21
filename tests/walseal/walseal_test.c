@@ -13,6 +13,11 @@
 **   walseal_test crash <dir> <mode> [seed]         cut/tear/reorder replay;
 **                                                  mode: stock|sealed
 **
+** With RECOVER naming the recovery tool, crash sealed also hands each cut to
+** it (REQ10/REC-1) and requires the rows walseal reads, in an output that
+** opens without walseal, and its inputs untouched; and once, a wrong key
+** refused with no output.
+**
 ** Stack: SQLCipher -> [walseal] -> count -> unix.  "count" measures what
 ** reaches the filesystem (calls, 4 KB alignment, blocks touched, and the
 ** same after puck-style write combining) and can record every write,
@@ -25,6 +30,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include "sqlite3.h"
 #include "walseal.h"
 
@@ -34,7 +40,10 @@ static const char *KEYHEX = "000102030405060708090a0b0c0d0e0f1011121314151617181
 /* Once known, the salt goes in the key (x'key||salt'): SQLCipher then need
 ** not read it from page 1, which a torn checkpoint write can destroy. */
 static char salthex[33];
-static const unsigned char WALKEY[32] = "walseal test key, 32 bytes long";
+/* walseal's key, as walseal_key_from_codec gives it: for a raw key,
+** SQLCipher's derived key is the key itself.  So the recovery tool, which
+** keys walseal from the codec, opens these databases. */
+static unsigned char walkey[32];
 
 /* ---- count VFS ------------------------------------------------------------ */
 
@@ -147,7 +156,7 @@ static sqlite3 *db_open(const char *path, const char *vfs, int sealed){
   snprintf(sql, sizeof(sql), "PRAGMA key = \"x'%s%s'\";", KEYHEX, salthex);
   if(!ok(db, sql) || !ok(db, "PRAGMA cipher_page_size = 4096; PRAGMA cipher_hmac_algorithm = HMAC_SHA256;"))
     goto fail;
-  if(sealed && walseal_key(db, "main", WALKEY, 32) != SQLITE_OK){ fprintf(stderr, "walseal_key failed\n"); goto fail; }
+  if(sealed && walseal_key(db, "main", walkey, 32) != SQLITE_OK){ fprintf(stderr, "walseal_key failed\n"); goto fail; }
   if(!ok(db, "PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = WAL;"
              "PRAGMA synchronous = FULL; PRAGMA wal_autocheckpoint = 0;"))
     goto fail;
@@ -359,6 +368,44 @@ static void put_file(const char *path, const unsigned char *b, long n){
   close(fd);
 }
 
+/* Runs the recovery tool on path into out under the database's key (or a
+** wrong one): its exit status. */
+static int run_tool(const char *tool, const char *path, const char *out, int wrongKey){
+  char cmd[1600];
+  FILE *p;
+  int st;
+  snprintf(cmd, sizeof(cmd), "'%s' -p 'cipher_page_size = 4096' -p 'cipher_hmac_algorithm = HMAC_SHA256' '%s' '%s' 2>/dev/null",
+           tool, path, out);
+  if(!(p = popen(cmd, "w"))) return -1;
+  fprintf(p, "x'%s%s'\n", wrongKey ? "ff0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" : KEYHEX, salthex);
+  st = pclose(p);
+  return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+/* REQ10/REC-1 on one cut: the rows of the tool's output, opened without
+** walseal; -1 if the tool failed, changed its inputs, or left a WAL. */
+static int recovered_rows(const char *tool, const char *dir, const char *path, int sz){
+  char wal[520], out[512], owal[520];
+  unsigned char *db0, *wal0, *db1, *wal1;
+  long nDb0, nWal0, nDb1, nWal1;
+  int n = -1;
+  snprintf(wal, sizeof(wal), "%s-wal", path);
+  snprintf(out, sizeof(out), "%s/recovered.db", dir);
+  snprintf(owal, sizeof(owal), "%s-wal", out);
+  rm_db(out);
+  db0 = slurp(path, &nDb0); wal0 = slurp(wal, &nWal0);
+  if(run_tool(tool, path, out, 0) == 0){
+    db1 = slurp(path, &nDb1); wal1 = slurp(wal, &nWal1);
+    if(nDb1 == nDb0 && nWal1 == nWal0 && !memcmp(db0, db1, nDb0) && (!nWal0 || !memcmp(wal0, wal1, nWal0))
+       && access(owal, F_OK) != 0)
+      n = verify(out, "count", 0, sz);
+    free(db1); free(wal1);
+  }
+  free(db0); free(wal0);
+  rm_db(out);
+  return n;
+}
+
 /* how: 0 apply, 1 skip, 2 garble the 4 KB blocks it touches */
 static void apply(const char *paths[2], const Op *o, int how){
   int fd;
@@ -385,6 +432,7 @@ static int cmd_crash(const char *dir, const char *mode, unsigned seed){
   long nDb, nWal;
   Mark *marks;
   int nMarks = 0, rows, c, i, fails = 0, checks = 0;
+  const char *tool = sealed ? getenv("RECOVER") : 0;
   sqlite3 *db;
 
   rnd_state = seed ? seed : 1;
@@ -433,7 +481,7 @@ static int cmd_crash(const char *dir, const char *mode, unsigned seed){
     durable = durable ? durable : 40;
     for(j = 0; j < nMarks; j++) if(marks[j].op >= c){ upper = marks[j].rows; break; }
     for(variant = 0; variant < 4; variant++){
-      int n, good = 0;
+      int n, r, good = 0;
       if(variant == 1 && (c == nOps || ops[c].kind != 'W')) continue;
       put_file(rpath, snapDb, nDb);
       if(snapWal) put_file(rwal, snapWal, nWal); else unlink(rwal);
@@ -447,10 +495,24 @@ static int cmd_crash(const char *dir, const char *mode, unsigned seed){
       }
       hows[nh] = 0;
       if(variant == 1) apply(rp, &ops[c], 2);
+      if(tool && c == nOps && variant == 0){
+        char out[512];
+        snprintf(out, sizeof(out), "%s/recovered.db", dir);
+        rm_db(out);
+        if(run_tool(tool, rpath, out, 1) != 1 || access(out, F_OK) == 0){
+          printf("  FAIL: REQ10/REC-1 recovery tool under a wrong key: exit 1 and no output expected\n");
+          fails++;
+        }
+      }
+      r = tool ? recovered_rows(tool, dir, rpath, sz) : 0;
       n = verify(rpath, vfs, sealed, sz);
       checks++;
       if(n >= durable && n <= upper)
         for(j = 0; j < nMarks; j++) if(marks[j].rows == n) good = 1;
+      if(tool && r != n){
+        if(fails < 10) printf("  FAIL: REQ10/REC-1 cut %d variant %d: walseal reads %d rows, the recovery tool's output %d\n", c, variant, n, r);
+        good = 0;
+      }
       if(!good){
         if(fails++ < 10) printf("  FAIL cut %d variant %d (op %c fid %d off %lld n %d): rows %d, want a commit boundary in [%d, %d]\n",
                                 c, variant, c < nOps ? ops[c].kind : '-', c < nOps ? ops[c].fid : -1,
@@ -464,11 +526,13 @@ static int cmd_crash(const char *dir, const char *mode, unsigned seed){
       }
     }
   }
-  printf("crash %s%s: %d replays, %d failures\n", mode, salthex[0] ? " (salt in key)" : "", checks, fails);
+  printf("crash %s%s%s: %d replays, %d failures\n", mode, salthex[0] ? " (salt in key)" : "",
+         tool ? ", each recovered by the tool" : "", checks, fails);
   return fails != 0;
 }
 
 int main(int argc, char **argv){
+  for(int i = 0; i < 32; i++) sscanf(KEYHEX + 2*i, "%2hhx", &walkey[i]);
   sqlite3_initialize();
   count_register();
   if(walseal_register("count", 0) != SQLITE_OK) return 2;
