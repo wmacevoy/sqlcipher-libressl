@@ -174,10 +174,15 @@ publisher retires fails the job by name; move it to the next release then.
 1. Master is green in CI.
 2. `./check.sh` passes locally with its default three crash-replay seeds (CI runs one).
 3. The version moves in the README's download commands and CONTRIBUTING's demo command.
-4. Tag and push: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. The `release` job
+4. Tag and push: `git tag -a libressl-vX.Y.Z -m "..." && git push origin libressl-vX.Y.Z`. The `release` job
    publishes the `.a` per platform, the WASM files, the JS helpers and
    `sqlcipher-wasm-static.tar.gz`, with generated notes; edit the notes to name what changed for
    integrators.
+
+Tags from v2.3.0 on are `libressl-vX.Y.Z`. A bare `vX.Y.Z` collides with upstream SQLCipher's
+tags (`v1.x`–`v4.x`) in any clone that fetches both, and `git fetch --tags` keeps whichever came
+first, so `v2.2.0` can name upstream's 2013 commit (sqlcipher-embedded FINDINGS 2026-10-21). The
+tags up to `v2.2.0` stay as they are: releases and the puck's pins name them.
 
 ## Syncing with upstream
 

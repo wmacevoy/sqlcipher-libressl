@@ -3,7 +3,7 @@ name: build-test
 on:
   push:
     branches: [master]
-    tags: ['v*']
+    tags: ['v*', 'libressl-v*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -239,7 +239,7 @@ jobs:
           retention-days: 90
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/libressl-v')
     needs: [upstream-diff, native, wasm]
     runs-on: ubuntu-24.04
     permissions:
