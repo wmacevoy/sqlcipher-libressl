@@ -4,6 +4,23 @@ What was learned the expensive way: surprises, dead ends, measurements. Blameles
 have found it, not who should have asked. Newest first. Entries before 2026-10-19 are reconstructed
 from commit messages.
 
+## 2026-10-20 — Following the key for import: what SQLCipher's key pragmas do
+
+- **What happened:** writing the record of the current key (QUEUE #21) found three things. In
+  SQLCipher 4.16.0, `PRAGMA textrekey` (and `textkey` before the first read) crashes natively
+  with a bus error, because `pragma.c` passes length -1 into `sqlcipher_cipher_ctx_set_pass`; a
+  `textkey` after a read does nothing. A deferred `BEGIN` alone takes no lock, so the authorizer's
+  checkpoint succeeds and a rekey right after it is not refused; only a transaction that has read
+  or written refuses it. And the derived key and its keyspec carry the file's salt, so neither can
+  key a file another database wrote under the same passphrase (from reading the code).
+- **Kind:** K3 (upstream code nobody here had run); K2 (the `BEGIN`, which the first native test
+  assumed otherwise).
+- **Cost:** none reported; found before release.
+- **Findable by:** the native codec check, run with each key pragma form.
+- **Changed:** the worker keeps the last allowed `key`/`hexkey`/`rekey`/`hexrekey` pragma's argument
+  for import, and leaves the text forms out (PR #24). The text forms' crash is QUEUE #23, upstream
+  code, so any fix goes in this repository's own layer.
+
 ## 2026-10-20 — Changing the key under the WAL: key pragmas act at prepare
 
 - **What happened:** two things, found while keeping walseal on the key across `PRAGMA rekey`
