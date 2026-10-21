@@ -78,7 +78,7 @@ jobs:
       # them locally.
       # The suite runs on linux-glibc-x64 only: REQ1/UP-1 promises it there,
       # and it has never been run on the other platforms.
-      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 REQ1/DUR-2 REQ6/ENC-3 REQ1/UP-1 REQ1/FMT-1 check.sh
+      - name: REQ1/ENC-1 REQ2/ENC-2 REQ2/PLAT-1 REQ8/DUR-2 REQ6/ENC-3 REQ1/UP-1 REQ1/FMT-1 check.sh
         run: ./check.sh
         env:
           CHECK_TCL: ${{ matrix.artifact == 'libsqlcipher-linux-glibc-x64.a' && 'yes' || 'no' }}
@@ -192,7 +192,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium firefox webkit
 
-      - name: REQ7/WASM-1 REQ1/DUR-1 REQ1/DUR-2 REQ1/API-1 run WASM tests in Chromium, Firefox and WebKit on the OPFS and IndexedDB backends
+      - name: REQ7/WASM-1 REQ1/DUR-1 REQ8/DUR-2 REQ1/API-1 run WASM tests in Chromium, Firefox and WebKit on the OPFS and IndexedDB backends
         run: node tests/wasm/run-tests.mjs
         env:
           NATIVE_EXPORT_DIR: ${{ runner.temp }}/exported

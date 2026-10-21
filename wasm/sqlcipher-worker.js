@@ -294,7 +294,7 @@ async function init() {
 
   // Files not pre-opened get a memory handle: the rollback journal SQLite
   // uses once, to switch a database to WAL. On OPFS the -wal must be the
-  // pre-opened file (REQ1/DUR-2), so a WAL in memory there is an error.
+  // pre-opened file (REQ8/DUR-2), so a WAL in memory there is an error.
   // On IndexedDB the WAL stays in memory: see _checkpoint_and_flush.
   Module._opfs_open_sync = function(name) {
     if (_useOpfs && /-wal$/.test(name)) return -1;
@@ -417,7 +417,7 @@ function _rows(stmt, bind) {
 /** Checkpoint WAL and flush dirty pages of the main DB to IndexedDB.
     On IndexedDB the WAL stays in memory: in WAL mode only a checkpoint writes
     the database, and it copies committed pages only, so each flush (one
-    IndexedDB transaction) stores a committed state (REQ1/DUR-2). */
+    IndexedDB transaction) stores a committed state (REQ8/DUR-2). */
 async function _checkpoint_and_flush() {
   if (_useOpfs || !_dbPtr || !_currentFilename) return;
   _api.exec(_dbPtr, "PRAGMA wal_checkpoint(TRUNCATE)");
@@ -431,7 +431,7 @@ async function _checkpoint_and_flush() {
 
 /** After a statement that changed the key (PRAGMA rekey, or key): checkpoint,
     so the database file is under the new key too and the old key opens
-    nothing (REQ1/DUR-2, REQ6/ENC-3). Returns true if it did. */
+    nothing (REQ8/DUR-2, REQ6/ENC-3). Returns true if it did. */
 function _settleKey() {
   var r = _api.walseal_settle(_dbPtr);
   if (r < 0) throw new Error(_api.errmsg(_dbPtr));
@@ -513,7 +513,7 @@ function _preopen(filename, hid) {
 }
 
 /** OPFS: pre-open the database's -wal, so SQLite finds its committed frames
-    after a crash (REQ1/DUR-2). */
+    after a crash (REQ8/DUR-2). */
 async function _preopenWal(filename) {
   if (_useOpfs) _preopen(filename + "-wal", await _vfs.openOpfs(filename + "-wal", 0x06, true));
 }
@@ -530,7 +530,7 @@ function _closeDb() {
   Module._opfs_preopen = {};
 }
 
-/** After the key: walseal's key, then the WAL in exclusive mode (REQ1/DUR-2,
+/** After the key: walseal's key, then the WAL in exclusive mode (REQ8/DUR-2,
     REQ6/ENC-3). A key that cannot read the database fails its first read
     here; open still resolves (REQ1/ENC-1), and the WAL is kept on close. */
 function _useWal() {

@@ -87,7 +87,7 @@ gcc -O2 -o example_basic examples/basic.c -I. -I"$prefix/include" \
   libsqlcipher.a "$prefix/lib/libcrypto.a" -lpthread -ldl -lm
 ./example_basic
 
-step "REQ1/DUR-2 REQ6/ENC-3 walseal: I/O, leak, crash replay (seeds ${SEEDS:-7 11 23}), derived key"
+step "REQ8/DUR-2 REQ6/ENC-3 walseal: I/O, leak, crash replay (seeds ${SEEDS:-7 11 23}), derived key"
 # Compiled only into the WASM build; checked here natively, against this
 # amalgamation and LibreSSL, before the TCL suite's configure removes sqlite3.c.
 LIBRESSL=$prefix sh tests/walseal/walseal.sh all

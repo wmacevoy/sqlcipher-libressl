@@ -1,5 +1,5 @@
 #!/bin/sh
-# walseal's native checks (REQ1/DUR-2, REQ6/ENC-3), against this repository's
+# walseal's native checks (REQ8/DUR-2, REQ6/ENC-3), against this repository's
 # amalgamation and LibreSSL's libcrypto.a:
 #   io     sealed WAL I/O is identical to stock
 #   leak   a sealed WAL shows no header field in the clear
