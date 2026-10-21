@@ -13,7 +13,7 @@ Higher rows call lower rows, never the reverse. Not enforced by a check.
 | unified API | 6 | `wasm/sqlcipher-api.js` | `SQLCipher.open()` → a handle; one worker per handle; each method is one message and one promise | pending requests |
 | oo1 shim | 6 | `wasm/sqlcipher-oo1.js` | sqlite3's oo1 API on the main thread; file in MEMFS; `save()` writes the whole file to IndexedDB | open DB, statements |
 | worker | 5 | `wasm/sqlcipher-worker.js` | answers the message protocol; chooses the backend; keeps the handle table the VFS reads and writes | handle table, current filename and key, IndexedDB buffer |
-| walseal | 4 | `wasm/walseal.c`, `wasm/walseal_sqlcipher.c` | VFS shim over the VFS, the default in the worker: enciphers the `-wal` file's headers in place, passes every other file through; keyed from SQLCipher's derived key, and from its new key for each WAL after a key change | walseal's AES key, per open database |
+| walseal | 4 | `walseal/walseal.c`, `walseal/walseal_sqlcipher.c`, `walseal/walseal_crypto_libressl.c` | VFS shim over the VFS, the default in the worker: enciphers the `-wal` file's headers in place, passes every other file through; keyed from SQLCipher's derived key, and from its new key for each WAL after a key change | walseal's AES key, per open database |
 | VFS | 4 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker's handle table through `EM_JS` | no |
 | WASM helpers | 4 | `wasm/sqlcipher_wasm.c` | thin `wasm_db_*` / `wasm_stmt_*` wrappers, so JS never manages WASM memory; one set of SQL-function trampolines that call the oo1 shim through `EM_JS` | no |
 | SQLCipher | 3 | `src/` (upstream + the patches), built as `sqlite3.c` | SQLite with page encryption; `sqlite3_key` | SQLite's own |
@@ -131,7 +131,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   - *The key* is SQLCipher's derived encryption key for the database (PBKDF2 of the passphrase,
     or the raw key), which walseal turns into its own with HMAC-SHA256 and the label
     `walseal hdr`; so the headers cost the same PBKDF2 work to attack as the pages.
-    `walseal_key_from_codec` (`wasm/walseal_sqlcipher.c`, compiled in the amalgamation's
+    `walseal_key_from_codec` (`walseal/walseal_sqlcipher.c`, compiled in the amalgamation's
     translation unit because it calls SQLCipher's static codec functions) runs right after
     `sqlite3_key` and before the first read: it asks SQLCipher to derive the key now, as the first
     page read would, so the read then finds it derived (one PBKDF2, not two), unmasks a copy,
@@ -143,7 +143,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   - *A key changed in a session* (`PRAGMA rekey`, or `key`, `hexkey` and their `re…` forms, through `exec` or `select`) — REQ8/DUR-2, REQ6/ENC-3. All frames of one WAL
     must be sealed under one key, the one the next `open` derives; SQLCipher applies these
     pragmas while the statement is prepared, and rekey rewrites every page in one commit. So
-    `walseal_follow_codec` (`wasm/walseal_sqlcipher.c`, run with `walseal_key_from_codec` at
+    `walseal_follow_codec` (`walseal/walseal_sqlcipher.c`, run with `walseal_key_from_codec` at
     open) installs two things: an authorizer that checkpoints (`TRUNCATE`) before a key pragma
     runs, so its commit starts a new WAL; and a key source walseal calls each time a new WAL
     starts, which hands it the codec's *write* key (the new key while rekey writes). After every
@@ -184,6 +184,15 @@ Reasons are from the commit messages unless marked *(inferred)*
     file's salt, so it opens an export of this database but not a file another database wrote
     under the same passphrase (from reading the code); and SQLCipher's `cipher_store_pass`, deprecated, which would keep
     the passphrase in the codec for every database.
+  - *One walseal for this repository and sqlcipher-embedded* (maintainers of both, 2026-10-20).
+    walseal lives in `walseal/`, not `wasm/`, because sqlcipher-embedded compiles the same files
+    for its devices (it merges this repository's releases). Its crypto is behind
+    `walseal_crypto.h`: AES-256 on whole blocks, HMAC-SHA256 and a wipe, with a LibreSSL backend
+    here (`walseal_crypto_libressl.c`) and a PSA backend there. A known-answer test
+    (`walseal.sh crypto`) checks a backend against FIPS-197 and RFC 4231 vectors, so every
+    backend seals identically: the other checks cannot see a wrong block cipher (FINDINGS
+    2026-10-20). Rejected: two copies ported by hand, which had already diverged (PSA against
+    EVP, the key source, the codec follower); and `#ifdef`s for each library inside `walseal.c`.
   - *export* checkpoints (`TRUNCATE`) before reading the file; *import* empties the `-wal` before
     reopening, so no frame of the old database is replayed over the new one; *shred* overwrites
     the `-wal`'s frames with random bytes (closing without a checkpoint, so they are still there)

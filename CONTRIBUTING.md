@@ -27,15 +27,16 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 | `src/sqlcipher.c` | patched: `atexit` under Emscripten (~line 406) |
 | `wasm/sqlcipher_wasm.c` | C helpers for the JS↔WASM boundary |
 | `wasm/opfs_vfs.c` | SQLite VFS whose file calls go to the worker (`EM_JS`) |
-| `wasm/walseal.c`, `walseal.h` | VFS shim over it: enciphers the `-wal` file's headers (from `sqlcipher-embedded`, ported to LibreSSL) |
-| `wasm/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key, kept on it when a statement changes the key, and that key kept for `import`; `#include`d after `sqlite3.c` |
+| `walseal/walseal.c`, `walseal.h` | VFS shim over the VFS: enciphers the `-wal` file's headers; shared with `sqlcipher-embedded`, which compiles it with its own crypto backend |
+| `walseal/walseal_crypto.h`, `walseal_crypto_libressl.c` | walseal's crypto (AES-256 blocks, HMAC-SHA256, wipe) and its LibreSSL backend |
+| `walseal/walseal_sqlcipher.c` | walseal's key from SQLCipher's derived key, kept on it when a statement changes the key, and that key kept for `import`; `#include`d after `sqlite3.c` |
 | `wasm/sqlcipher-api.js` | unified API |
 | `wasm/sqlcipher-worker.js` | Web Worker: OPFS or IndexedDB backend |
 | `wasm/sqlcipher-oo1.js` | oo1 shim (main thread, IndexedDB blob) |
 | `build-sqlcipher-libressl.sh` | WASM build: amalgamation, `emcc`, JS helpers |
 | `examples/basic.c` | native smoke test |
 | `tests/wasm/` | browser tests (`test.html`), their Playwright runner, and test-only worker wrappers (`backend-worker.js` forces the backend) |
-| `tests/walseal/` | walseal's native checks: I/O, leak, crash replay, derived key, the key kept for `import` |
+| `tests/walseal/` | walseal's native checks: crypto vectors, I/O, leak, crash replay, derived key, the key kept for `import` |
 
 ## Build
 
@@ -82,7 +83,7 @@ site's data, or `shred()` the database.
 # minutes; SEEDS=7 runs one, as CI does.
 ./check.sh                                   # ends "0 errors out of 208 tests" and "PASS: check.sh"
 
-# One part of walseal's checks, after `make sqlite3.c`: io, leak, crash or codec
+# One part of walseal's checks, after `make sqlite3.c`: crypto, io, leak, crash or codec
 LIBRESSL=$HOME/libressl sh tests/walseal/walseal.sh crash   # ends "walseal: all checks passed"
 
 # Browser tests: copy the build and the fixture next to the runner, then run it
@@ -136,6 +137,7 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | shred probe (`shred-probe-worker.js`) | shred deleting a file without overwriting it | shred planted to skip the overwrite: run 39466566906 |
 | REQ8/DUR-2 crash tests (`crash-worker.js`) | a commit or a cross-exec transaction a worker death leaves corrupt or half-applied, on either backend | before the WAL: OPFS and IndexedDB both failed, run 39473646953 |
 | walseal's native checks, in `check.sh` | a cleartext WAL header, a lost synced write, a break in keying from the derived key | one WAL write dropped: 4724 of 4986 replays failed; encipher skipped: leak check failed (locally, 2026-10-20) |
+| walseal crypto known-answer test (`walseal.sh crypto`) | a backend whose AES-256 or HMAC-SHA256 differs from the published vectors | backend planted to copy instead of encrypt: both AES vectors FAIL, exit 1, while `leak` still passed (locally, 2026-10-20) |
 | WASM WAL tests | the WAL kept in memory, its headers in the clear, the WAL deleted on a wrong-key close | runs 39477796027, 39476663107, 39476667095 |
 | rekey crash test, walseal codec rekey checks | a WAL sealed under a stale key; the follower missing | neither key opens at 18 of 28 kill points on OPFS, run 39483632951; 7 failures with the follower stubbed (locally, 2026-10-20) |
 | fail-worker ping test (`fail-worker.js`) | a failed open leaving its worker running | run 39484171208 |

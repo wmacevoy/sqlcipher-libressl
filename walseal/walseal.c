@@ -4,11 +4,12 @@
 **
 ** Provenance: copied from the maintainer's sqlcipher-embedded (BSD, same
 ** author), branch experiment/wal-seal, commit 5d50c676,
-** embedded/sqlcipher/walseal.c.  Changed here: PSA Crypto -> LibreSSL's
-** libcrypto (EVP AES-256-ECB without padding, HMAC-SHA256 via HMAC()), and
-** walseal_key(db, zDb, NULL, 0), which lets an unencrypted database's WAL
-** pass through.  The cipher, the tweaks and the header regions are
-** unchanged, so the source's crash-replay findings still hold.
+** embedded/sqlcipher/walseal.c.  Changed here: the crypto library moved
+** behind walseal_crypto.h (LibreSSL here, PSA in sqlcipher-embedded, which
+** compiles this file from this directory), and walseal_key(db, zDb, NULL,
+** 0), which lets an unencrypted database's WAL pass through.  The cipher,
+** the tweaks and the header regions are unchanged, so the source's
+** crash-replay findings still hold.
 **
 ** SQLCipher encrypts the page images in the WAL; SQLite writes the 32-byte
 ** WAL header and each frame's 24-byte header (page number, commit size,
@@ -41,10 +42,8 @@
 #include <stdint.h>
 #include <string.h>
 #include "sqlite3.h"
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/crypto.h>
 #include "walseal.h"
+#include "walseal_crypto.h"
 
 #define WS_FCNTL_KEY  0x5753454c          /* 'WSEL' */
 #define WS_FCNTL_SRC  0x57534b53          /* 'WSKS' */
@@ -63,7 +62,7 @@ struct WsFile {
   int isMain;
   /* main database */
   const char *zName;           /* valid until xClose (SQLite's guarantee) */
-  EVP_CIPHER_CTX *aes;         /* AES-256 (ECB: the PRP's block cipher) */
+  walseal_aes *aes;            /* AES-256 (ECB: the PRP's block cipher) */
   int keyed;
   int plain;                   /* walseal_key(..., NULL, 0): the WAL passes through */
   int (*xKey)(void*, unsigned char*, int*);   /* walseal_key_source, or 0 */
@@ -83,12 +82,9 @@ static WsFile *ws_mains;       /* across all walseal VFSes */
 
 /* ---- the tweaked PRP ----------------------------------------------------- */
 
-/* ECB without padding keeps no state between calls, so one context serves
-** every call; n is a multiple of 16. */
+/* n is a multiple of 16. */
 static int aes(WsFile *m, const u8 *in, u8 *out, size_t n){
-  int olen = 0;
-  return EVP_EncryptUpdate(m->aes, out, &olen, in, (int)n) == 1 && olen == (int)n
-         ? SQLITE_OK : SQLITE_ERROR;
+  return walseal_aes_encrypt(m->aes, in, out, n);
 }
 
 static void swap(u8 *a, u8 *b, int h){ u8 s[16]; memcpy(s, a, h); memcpy(a, b, h); memcpy(b, s, h); }
@@ -120,7 +116,7 @@ static int all_zero(const u8 *a, int n){ while(n--) if(*a++) return 0; return 1;
 
 /* key = HMAC-SHA256(master, "walseal hdr"), as an AES-256 key */
 static void ws_dropkey(WsFile *m){
-  EVP_CIPHER_CTX_free(m->aes);    /* wipes the key schedule */
+  walseal_aes_free(m->aes);       /* wipes the key schedule */
   m->aes = 0;
   m->keyed = 0;
   m->plain = 0;
@@ -130,21 +126,13 @@ static void ws_dropkey(WsFile *m){
 ** database: its pages are in the clear anyway). */
 static int ws_setkey(WsFile *m, const u8 *master, int n){
   u8 k[32];
-  unsigned int len = 0;
   int rc;
   if(!master && n == 0){ ws_dropkey(m); m->plain = 1; return SQLITE_OK; }
   if(n < 16) return SQLITE_MISUSE;
   ws_dropkey(m);
-  rc = HMAC(EVP_sha256(), master, n, (const u8*)"walseal hdr", 11, k, &len) && len == 32
-       ? SQLITE_OK : SQLITE_ERROR;
-  if(rc == SQLITE_OK){
-    rc = (m->aes = EVP_CIPHER_CTX_new()) != 0
-         && EVP_EncryptInit_ex(m->aes, EVP_aes_256_ecb(), 0, k, 0) == 1
-         && EVP_CIPHER_CTX_set_padding(m->aes, 0) == 1
-         ? SQLITE_OK : SQLITE_ERROR;
-    if(rc) ws_dropkey(m);
-  }
-  OPENSSL_cleanse(k, sizeof(k));
+  rc = walseal_hmac_sha256(master, n, (const u8*)"walseal hdr", 11, k);
+  if(rc == SQLITE_OK) rc = walseal_aes_new(&m->aes, k);
+  walseal_cleanse(k, sizeof(k));
   m->keyed = rc == SQLITE_OK;
   return rc;
 }
@@ -157,7 +145,7 @@ static int ws_rekey(WsFile *m){
   if(!m->xKey) return SQLITE_OK;
   rc = m->xKey(m->pKeyArg, k, &n);
   if(rc == SQLITE_OK) rc = n >= 16 && n <= (int)sizeof(k) ? ws_setkey(m, k, n) : SQLITE_ERROR;
-  OPENSSL_cleanse(k, sizeof(k));
+  walseal_cleanse(k, sizeof(k));
   return rc;
 }
 
