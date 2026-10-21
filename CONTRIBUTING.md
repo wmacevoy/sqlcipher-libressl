@@ -67,7 +67,7 @@ To run the browser demo from a release instead:
 
 ```sh
 cd examples/web
-gh release download v2.0.0 --repo wmacevoy/sqlcipher-libressl
+gh release download v2.1.0 --repo wmacevoy/sqlcipher-libressl
 python3 -m http.server 8000     # open http://localhost:8000
 ```
 
@@ -142,6 +142,7 @@ requirement with no test is a [QUEUE](docs/QUEUE.md) item.
 | "exported files open in the native build" step | an export missing what its WAL held | `no such table: t`, run 39487510469 |
 | WASM "worker fails to load" test | `open` hanging on a missing or throwing worker script, or leaving that worker running | without the fix: "did not settle in 10 s", run 39525813356; `terminate()` removed: "the worker whose script threw still runs", run 39525819441 |
 | WASM "import after a key pragma" tests, walseal codec record check | `import` keyed with a stale key; a refused or failed pragma changing the kept key | without the fix: "file is not a database", run 39525816386; record disabled or moved ahead of the refusals: codec check FAIL (locally, 2026-10-20) |
+| WASM "textkey and textrekey are refused" test, walseal codec refusal checks | `PRAGMA textkey` or `textrekey` reaching SQLCipher | without the fix: "textrekey: did not reject", 0/6 runs, run 39531208665; natively `Bus error: 10` (locally, 2026-10-20) |
 
 ## Pinned and floating inputs
 
