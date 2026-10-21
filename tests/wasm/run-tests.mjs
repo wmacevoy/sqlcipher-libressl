@@ -11,7 +11,7 @@
 // passes and the page reports the mode it was asked for. Every browser and backend must pass;
 // a browser that fails to launch fails its runs.
 //
-// With NATIVE_EXPORT_DIR set, each run saves the bytes the REQ1/EXP-1 test's export()
+// With NATIVE_EXPORT_DIR set, each run saves the bytes the REQ9/EXP-1 test's export()
 // returned there, as <browser>-<backend>.db, for CI to open with the native build
 // (tests/wasm/open-export.c).
 

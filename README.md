@@ -96,7 +96,8 @@ SQLCipher's derived key. On IndexedDB the WAL stays in worker memory and only co
 checkpointed states are stored. `export()` checkpoints first, so it returns the whole database.
 `PRAGMA rekey` through `exec` keeps every commit: the worker checkpoints before and after it, and
 the WAL that follows is sealed under the new key. A key pragma inside a transaction, or after an
-`open` whose key could not read the database, is refused with `not authorized`.
+`open` whose key could not read the database, is refused with `not authorized`; so are
+`PRAGMA textkey` and `textrekey`, which crash SQLCipher 4.16.0 (use `key` and `rekey`).
 
 ### Worker message protocol
 
@@ -197,7 +198,7 @@ opens each browser run's `export()` under its key (`tests/wasm/open-export.c`).
 
 **Not tested, by decision:** stock SQLCipher opening files written here.
 The reason and when to revisit are under *Scope decisions* in
-[docs/REQUIREMENTS_v8.md](docs/REQUIREMENTS_v8.md#scope-decisions).
+[docs/REQUIREMENTS_v9.md](docs/REQUIREMENTS_v9.md#scope-decisions).
 
 ## Patches
 

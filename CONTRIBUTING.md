@@ -13,7 +13,7 @@ Fork of SQLCipher v4.16.0 (SQLite 3.53.1), patched for LibreSSL and WASM: two pa
 
 | Document | Answers |
 | -------- | ------- |
-| [docs/REQUIREMENTS_v8.md](docs/REQUIREMENTS_v8.md) | what must observably be true, and what is not being built |
+| [docs/REQUIREMENTS_v9.md](docs/REQUIREMENTS_v9.md) | what must observably be true, and what is not being built |
 | [docs/DESIGN_v1.md](docs/DESIGN_v1.md) | how the fork meets them, what was rejected, and the known hazards |
 | [docs/QUEUE.md](docs/QUEUE.md) | what is being worked, in what order, and what would make it done |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | what was learned the expensive way |
@@ -92,7 +92,7 @@ cp wasm/dist/sqlcipher.js wasm/dist/sqlcipher.wasm wasm/dist/sqlcipher-api.js \
 (cd tests/wasm && npm ci && npx playwright install chromium firefox webkit)   # Playwright as locked
 node tests/wasm/run-tests.mjs                # ends "Result: 6/6 browser/backend runs passed -- PASS"
 
-# Exported files in the native build (REQ1/EXP-1, REQ1/FMT-1): save each run's export(),
+# Exported files in the native build (REQ9/EXP-1, REQ1/FMT-1): save each run's export(),
 # then open each with open-export.c, built on sqlite3.c (see its header for the gcc line)
 NATIVE_EXPORT_DIR=/tmp/exported node tests/wasm/run-tests.mjs
 for f in /tmp/exported/*.db; do ./open-export "$f" export-key 50; done   # each prints "PASS: ..."
