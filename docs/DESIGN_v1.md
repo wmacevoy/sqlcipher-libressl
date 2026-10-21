@@ -1,6 +1,6 @@
 # Design — v1
 
-How sqlcipher-libressl meets [REQUIREMENTS_v9](REQUIREMENTS_v9.md), and what was rejected. The
+How sqlcipher-libressl meets [REQUIREMENTS_v10](REQUIREMENTS_v10.md), and what was rejected. The
 database engine and its crypto are upstream's and are described here only as far as a change needs
 them; the fork's own work is the patches, the WASM layer, and the build.
 
@@ -214,7 +214,7 @@ Reasons are from the commit messages unless marked *(inferred)*
   `sh` has no `pipefail`. The LibreSSL pin moved to `libressl.env` so `check.sh` and the wasm job
   read one place. Rejected: keeping the native steps in the workflow and documenting them twice.
 - **No test of stock SQLCipher reading our files** (2026-10-20, maintainer) — REQ1/FMT-1 — see
-  [Scope decisions](REQUIREMENTS_v9.md#scope-decisions).
+  [Scope decisions](REQUIREMENTS_v10.md#scope-decisions).
 - **The native build opens what the WASM build exports** (maintainer, 2026-10-20) — REQ9/EXP-1,
   REQ1/FMT-1 — under WAL the newest rows sit in the `-wal` until `export()` checkpoints, and the
   exported file is a WAL-mode file with no `-wal` beside it. `run-tests.mjs` saves each run's

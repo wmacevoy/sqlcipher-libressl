@@ -198,7 +198,7 @@ opens each browser run's `export()` under its key (`tests/wasm/open-export.c`).
 
 **Not tested, by decision:** stock SQLCipher opening files written here.
 The reason and when to revisit are under *Scope decisions* in
-[docs/REQUIREMENTS_v9.md](docs/REQUIREMENTS_v9.md#scope-decisions).
+[docs/REQUIREMENTS_v10.md](docs/REQUIREMENTS_v10.md#scope-decisions).
 
 ## Patches
 
